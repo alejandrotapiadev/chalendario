@@ -20,8 +20,19 @@ API (apps/api)
 
 Monolito modular: un solo proceso, con la separación lógica en módulos dentro de
 `apps/api/src/modules/<módulo>`. Cada módulo registra sus rutas en `buildApp`
-(`apps/api/src/app.ts`). Los módulos no acceden a las tablas de otros: se hablan por su
-interfaz pública.
+(`apps/api/src/app.ts`). Cada módulo es dueño de sus tablas y solo él las escribe; los
+demás usan su interfaz pública (p. ej. `events` pregunta a `calendars` si un calendario es
+del usuario). La única excepción es de lectura: las consultas de eventos hacen `JOIN` con
+`calendars` para acotar los resultados al usuario.
+
+Cada módulo sigue la misma forma: `*.routes.ts` (HTTP + validación con los esquemas de
+`@calendar/shared`), `*.service.ts` (casos de uso y transacciones, cuando hay lógica) y
+`*.repository.ts` (SQL). Las reglas de negocio no viven aquí sino en `packages/domain`.
+
+**Autenticación provisional:** el módulo `auth` actúa como un único usuario local
+(`DEV_USER_EMAIL`), creado en la primera petición con un calendario «Personal». Los módulos
+solo leen `request.userId`, así que sustituirlo por autenticación real no les afecta.
+Mientras tanto, la API no debe exponerse fuera de localhost.
 
 `packages/domain` contiene la lógica pura (sin I/O ni dependencias de framework), de modo
 que se pueda testear en aislamiento y reutilizar en el frontend (p. ej. expandir

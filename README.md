@@ -17,8 +17,28 @@ cp .env.example .env
 pnpm db:up          # PostgreSQL en docker (crea también la BD calendar_test)
 pnpm migrate:up     # aplica migrations/
 pnpm dev:api        # http://localhost:3000/health
-pnpm dev:web        # http://localhost:5173
+pnpm dev:web        # http://localhost:5173 (proxy /api -> :3000)
 ```
+
+> Aún no hay autenticación: la API actúa como un único usuario local. No la expongas
+> fuera de tu máquina.
+
+## API
+
+| Método y ruta           | Descripción                                                    |
+| ----------------------- | -------------------------------------------------------------- |
+| `GET /health`           | Estado del servicio y de la base de datos                      |
+| `GET /calendars`        | Calendarios del usuario                                        |
+| `POST /calendars`       | Crear calendario (`name`, `color?`)                            |
+| `PATCH /calendars/:id`  | Editar nombre o color                                          |
+| `GET /events?from=&to=` | Eventos que se solapan con `[from, to)` (ISO 8601, máx. 400 d) |
+| `GET /events/:id`       | Un evento                                                      |
+| `POST /events`          | Crear evento (versión 1)                                       |
+| `PATCH /events/:id`     | Editar: crea una versión nueva; `expectedVersion` opcional     |
+| `DELETE /events/:id`    | Borrado lógico (crea una versión con `deleted`); 204           |
+
+Los contratos (esquemas zod y DTOs) están en `packages/shared`. Errores:
+`{ error, message, issues? }` con 400 (validación), 404, 409 (`version_conflict`).
 
 ## Comandos
 

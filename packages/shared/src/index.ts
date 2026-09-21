@@ -4,3 +4,13 @@ export interface HealthResponse {
   database: 'up' | 'down';
   uptimeSeconds: number;
 }
+
+/** Forma de los errores de la API. */
+export interface ApiErrorBody {
+  error: string;
+  message: string;
+  issues?: string[];
+}
+
+export * from './calendar.ts';
+export * from './event.ts';

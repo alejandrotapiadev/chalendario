@@ -5,6 +5,7 @@ const schema = z.object({
   API_PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   DATABASE_URL: z.string().min(1),
+  DEV_USER_EMAIL: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema>;

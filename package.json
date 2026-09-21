@@ -19,7 +19,7 @@
     "test:watch": "vitest",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",
-    "migrate": "node-pg-migrate --migrations-dir migrations --migration-file-language sql --database-url-var DATABASE_URL",
+    "migrate": "node --env-file-if-exists=.env node_modules/node-pg-migrate/bin/node-pg-migrate.js --migrations-dir migrations --migration-file-language sql --database-url-var DATABASE_URL",
     "migrate:up": "pnpm migrate up",
     "migrate:down": "pnpm migrate down",
     "migrate:create": "pnpm migrate create"
@@ -29,6 +29,7 @@
     "@types/node": "^24.13.6",
     "@types/pg": "^8.23.1",
     "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.23.0",
     "prettier": "^3.9.8",

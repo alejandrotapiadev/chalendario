@@ -1,13 +1,12 @@
-import type { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { buildApp } from '../../apps/api/src/app.ts';
 import { createEvent } from '../../apps/api/src/modules/events/events.service.ts';
 import { resetDatabase, testDatabaseUrl } from '../helpers/db.ts';
+import { buildTestApp, signUp, type Client } from '../helpers/session.ts';
 
 describe.skipIf(!testDatabaseUrl)('API de eventos', () => {
   const pool = new pg.Pool({ connectionString: testDatabaseUrl });
-  let app: FastifyInstance;
+  let app: Client;
   let calendarId: string;
 
   beforeAll(() => resetDatabase(pool));
@@ -15,11 +14,9 @@ describe.skipIf(!testDatabaseUrl)('API de eventos', () => {
 
   beforeEach(async () => {
     await pool.query('TRUNCATE event_versions, events, calendars, users CASCADE');
-    // Una app nueva por test: el usuario local se vuelve a crear tras el TRUNCATE.
-    app = buildApp({ db: pool });
-    await app.ready();
-    const res = await app.inject({ method: 'GET', url: '/calendars' });
-    calendarId = res.json()[0].id;
+    const user = await signUp(await buildTestApp(pool));
+    app = user.client;
+    calendarId = user.calendarId;
   });
 
   const gym = () => ({

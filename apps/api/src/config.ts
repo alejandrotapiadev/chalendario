@@ -5,7 +5,11 @@ const schema = z.object({
   API_PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   DATABASE_URL: z.string().min(1),
-  DEV_USER_EMAIL: z.string().optional(),
+  /** `false` cierra el alta de cuentas nuevas (p. ej. tras crear la tuya en un servidor público). */
+  REGISTRATION_OPEN: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema>;

@@ -11,6 +11,16 @@ describe('loadConfig', () => {
     expect(loadConfig({ DATABASE_URL: 'postgres://x', API_PORT: '8080' }).API_PORT).toBe(8080);
   });
 
+  it('REGISTRATION_OPEN es true por defecto y acepta false', () => {
+    expect(loadConfig({ DATABASE_URL: 'postgres://x' }).REGISTRATION_OPEN).toBe(true);
+    expect(
+      loadConfig({ DATABASE_URL: 'postgres://x', REGISTRATION_OPEN: 'false' }).REGISTRATION_OPEN,
+    ).toBe(false);
+    expect(() => loadConfig({ DATABASE_URL: 'postgres://x', REGISTRATION_OPEN: 'no' })).toThrow(
+      /REGISTRATION_OPEN/,
+    );
+  });
+
   it('falla si falta DATABASE_URL', () => {
     expect(() => loadConfig({})).toThrow(/DATABASE_URL/);
   });

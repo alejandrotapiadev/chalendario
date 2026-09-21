@@ -12,5 +12,6 @@ export interface ApiErrorBody {
   issues?: string[];
 }
 
+export * from './auth.ts';
 export * from './calendar.ts';
 export * from './event.ts';

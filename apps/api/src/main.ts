@@ -7,7 +7,8 @@ const db = createPool(config.DATABASE_URL);
 
 const app = buildApp({
   db,
-  ...(config.DEV_USER_EMAIL && { devUserEmail: config.DEV_USER_EMAIL }),
+  secureCookies: config.NODE_ENV === 'production',
+  registrationOpen: config.REGISTRATION_OPEN,
   logger: {
     level: config.LOG_LEVEL,
     ...(config.NODE_ENV === 'development' && {

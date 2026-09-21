@@ -1,7 +1,7 @@
 # Modelo de datos
 
-> Estado: implementado hasta la fase 1 (migraciones 002–005). Recordatorios y recurrencia
-> son diseño para la fase 3.
+> Estado: implementado hasta la fase 2 (migraciones 002–005; el versionado no necesitó
+> ninguna nueva). Recordatorios y recurrencia son diseño para la fase 3.
 > Regla clave (ADR-002): **cada modificación de un evento crea una nueva versión; las
 > versiones nunca se modifican.**
 
@@ -50,10 +50,23 @@ Las versiones son inmutables a nivel de base de datos: un trigger rechaza `UPDAT
   (ADR-005). El evento desaparece de la API pero su historial se conserva.
 - **Concurrencia:** `PATCH` acepta `expectedVersion`; si no coincide con la versión vigente,
   la API responde 409. Sin él, gana la última escritura (siempre serializada por el bloqueo).
-- **Restaurar** (fase 2): copiar una versión antigua como versión nueva; nunca se reescribe
-  el historial. Restaurar un evento borrado es lo mismo (copia con `deleted = false`).
+- **Restaurar:** `POST /events/:id/restore/:version` copia una versión antigua como versión
+  nueva (`change_reason = 'restored from version N'`); nunca se reescribe el historial.
+  Restaurar un evento borrado es lo mismo (la copia lleva `deleted = false`). Si el evento
+  está vivo y su contenido ya coincide con el de la versión pedida, no hay modificación y
+  no se crea versión.
+- **Deshacer** (UI): no existe como operación propia; es una restauración. Deshacer una
+  edición restaura la versión anterior; deshacer un borrado restaura la última versión
+  viva; deshacer una creación borra el evento. Se pasa `expectedVersion` para no pisar
+  cambios hechos entretanto.
 
-Evolución posible: guardar además un `changes` (JSON `{campo: {from, to}}`) por versión.
+### Qué cambió entre versiones
+
+No se almacena: se **deriva** de los snapshots inmutables al consultar el historial
+(`describeChanges` en `packages/domain`). Cada versión devuelve `changes: [{ field, from,
+to }]` respecto a la anterior (vacío en la versión 1); el cliente lo convierte en frases
+como «Inicio: 21 sept, 10:00 → 21 sept, 11:00». Al no duplicar datos, nunca puede quedar
+desincronizado con las versiones.
 
 ### Fechas, zonas horarias y todo el día
 

@@ -25,17 +25,20 @@ pnpm dev:web        # http://localhost:5173 (proxy /api -> :3000)
 
 ## API
 
-| Método y ruta           | Descripción                                                    |
-| ----------------------- | -------------------------------------------------------------- |
-| `GET /health`           | Estado del servicio y de la base de datos                      |
-| `GET /calendars`        | Calendarios del usuario                                        |
-| `POST /calendars`       | Crear calendario (`name`, `color?`)                            |
-| `PATCH /calendars/:id`  | Editar nombre o color                                          |
-| `GET /events?from=&to=` | Eventos que se solapan con `[from, to)` (ISO 8601, máx. 400 d) |
-| `GET /events/:id`       | Un evento                                                      |
-| `POST /events`          | Crear evento (versión 1)                                       |
-| `PATCH /events/:id`     | Editar: crea una versión nueva; `expectedVersion` opcional     |
-| `DELETE /events/:id`    | Borrado lógico (crea una versión con `deleted`); 204           |
+| Método y ruta                       | Descripción                                                                                                          |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                       | Estado del servicio y de la base de datos                                                                            |
+| `GET /calendars`                    | Calendarios del usuario                                                                                              |
+| `POST /calendars`                   | Crear calendario (`name`, `color?`)                                                                                  |
+| `PATCH /calendars/:id`              | Editar nombre o color                                                                                                |
+| `GET /events?from=&to=`             | Eventos que se solapan con `[from, to)` (ISO 8601, máx. 400 d)                                                       |
+| `GET /events/:id`                   | Un evento                                                                                                            |
+| `POST /events`                      | Crear evento (versión 1)                                                                                             |
+| `PATCH /events/:id`                 | Editar: crea una versión nueva; `expectedVersion` opcional                                                           |
+| `DELETE /events/:id`                | Borrado lógico (crea una versión con `deleted`); 204                                                                 |
+| `GET /events/:id/versions`          | Historial (más reciente primero) con qué cambió en cada versión; funciona también con eventos borrados               |
+| `GET /events/:id/versions/:version` | Una versión concreta                                                                                                 |
+| `POST /events/:id/restore/:version` | Restaurar: crea una versión nueva con ese contenido (también recupera un evento borrado); `expectedVersion` opcional |
 
 Los contratos (esquemas zod y DTOs) están en `packages/shared`. Errores:
 `{ error, message, issues? }` con 400 (validación), 404, 409 (`version_conflict`).

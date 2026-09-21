@@ -227,6 +227,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@calendar/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@calendar/shared':
         specifier: workspace:*
         version: link:../../packages/shared

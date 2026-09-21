@@ -501,6 +501,84 @@ textarea {
   flex: 1;
 }
 
+/* ---------- Historial y avisos ---------- */
+
+.muted {
+  color: var(--muted);
+}
+.btn-small {
+  align-self: flex-start;
+  padding: 3px 8px;
+  font-size: 0.85rem;
+}
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.history-head time {
+  margin-left: auto;
+  font-size: 0.8rem;
+}
+.history-changes {
+  margin: 0;
+  padding-left: 18px;
+}
+.history-line {
+  margin: 0;
+}
+.badge {
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.75rem;
+}
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.3);
+  transform: translateX(-50%);
+}
+.toast-action {
+  padding: 2px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ---------- Móvil ---------- */
 
 @media (max-width: 600px) {

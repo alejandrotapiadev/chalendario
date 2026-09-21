@@ -9,6 +9,8 @@ import {
   toDateInput,
   toTimeInput,
 } from '../calendar/dates.ts';
+import { STATUS_LABELS } from '../calendar/history.ts';
+import { HistoryPanel } from './HistoryPanel.tsx';
 
 /** Valores iniciales para crear un evento. */
 export interface EventDraft {
@@ -20,11 +22,13 @@ export interface EventDraft {
 export type DialogTarget =
   { kind: 'create'; draft: EventDraft } | { kind: 'edit'; event: EventDto };
 
-const STATUS_LABELS: Record<EventDto['status'], string> = {
-  confirmed: 'Confirmado',
-  tentative: 'Provisional',
-  cancelled: 'Cancelado',
-};
+/** Lo que ha pasado tras una operación con éxito; permite ofrecer «Deshacer». */
+export type ChangeInfo =
+  | { kind: 'created'; event: EventDto }
+  | { kind: 'updated'; event: EventDto; previousVersion: number }
+  | { kind: 'restored'; event: EventDto; previousVersion: number }
+  /** `event` es el estado justo antes de borrar. */
+  | { kind: 'deleted'; event: EventDto };
 
 const PALETTE = [
   '#ef4444',
@@ -41,8 +45,8 @@ interface Props {
   target: DialogTarget;
   calendars: CalendarDto[];
   onClose: () => void;
-  /** Se llama tras guardar o borrar con éxito, para recargar los eventos. */
-  onChanged: () => void;
+  /** Se llama tras guardar, borrar o restaurar con éxito, para recargar los eventos. */
+  onChanged: (change: ChangeInfo) => void;
 }
 
 interface FormState {
@@ -113,6 +117,7 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
   const [form, setForm] = useState(() => initialState(target, calendars));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const editing = target.kind === 'edit' ? target.event : null;
 
   useEffect(() => {
@@ -122,12 +127,11 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  async function run(action: () => Promise<unknown>) {
+  async function run(action: () => Promise<ChangeInfo>) {
     setBusy(true);
     setError(null);
     try {
-      await action();
-      onChanged();
+      onChanged(await action());
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.userMessage : 'No se pudo conectar con el servidor');
@@ -155,183 +159,212 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
     };
     if (editing) {
       const input: UpdateEventInput = { ...content, expectedVersion: editing.version };
-      void run(() => api.updateEvent(editing.id, input));
+      void run(async () => ({
+        kind: 'updated',
+        event: await api.updateEvent(editing.id, input),
+        previousVersion: editing.version,
+      }));
     } else {
       const input: CreateEventInput = { ...content, calendarId: form.calendarId };
-      void run(() => api.createEvent(input));
+      void run(async () => ({ kind: 'created', event: await api.createEvent(input) }));
     }
   }
 
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} onCancel={onClose}>
-      <form onSubmit={submit} className="form">
-        <h2>{editing ? 'Editar evento' : 'Nuevo evento'}</h2>
+      {showHistory && editing ? (
+        <HistoryPanel
+          eventId={editing.id}
+          busy={busy}
+          onBack={() => setShowHistory(false)}
+          onRestore={(version) =>
+            void run(async () => ({
+              kind: 'restored',
+              event: await api.restoreEvent(editing.id, version, {
+                expectedVersion: editing.version,
+              }),
+              previousVersion: editing.version,
+            }))
+          }
+        />
+      ) : (
+        <form onSubmit={submit} className="form">
+          <h2>{editing ? 'Editar evento' : 'Nuevo evento'}</h2>
 
-        <label className="field">
-          <span>Título</span>
-          <input
-            autoFocus
-            required
-            value={form.title}
-            onChange={(e) => set('title', e.target.value)}
-            maxLength={200}
-          />
-        </label>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.allDay}
-            onChange={(e) => set('allDay', e.target.checked)}
-          />
-          Todo el día
-        </label>
-
-        <div className="field-row">
           <label className="field">
-            <span>Inicio</span>
+            <span>Título</span>
             <input
-              type="date"
+              autoFocus
               required
-              value={form.startDate}
-              onChange={(e) => set('startDate', e.target.value)}
+              value={form.title}
+              onChange={(e) => set('title', e.target.value)}
+              maxLength={200}
             />
           </label>
-          {!form.allDay && (
-            <label className="field">
-              <span className="sr-only">Hora de inicio</span>
-              <input
-                type="time"
-                required
-                value={form.startTime}
-                onChange={(e) => set('startTime', e.target.value)}
-              />
-            </label>
-          )}
-        </div>
-        <div className="field-row">
-          <label className="field">
-            <span>Fin</span>
-            <input
-              type="date"
-              required
-              value={form.endDate}
-              onChange={(e) => set('endDate', e.target.value)}
-            />
-          </label>
-          {!form.allDay && (
-            <label className="field">
-              <span className="sr-only">Hora de fin</span>
-              <input
-                type="time"
-                required
-                value={form.endTime}
-                onChange={(e) => set('endTime', e.target.value)}
-              />
-            </label>
-          )}
-        </div>
 
-        <div className="field-row">
-          {!editing && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.allDay}
+              onChange={(e) => set('allDay', e.target.checked)}
+            />
+            Todo el día
+          </label>
+
+          <div className="field-row">
             <label className="field">
-              <span>Calendario</span>
-              <select value={form.calendarId} onChange={(e) => set('calendarId', e.target.value)}>
-                {calendars.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
+              <span>Inicio</span>
+              <input
+                type="date"
+                required
+                value={form.startDate}
+                onChange={(e) => set('startDate', e.target.value)}
+              />
+            </label>
+            {!form.allDay && (
+              <label className="field">
+                <span className="sr-only">Hora de inicio</span>
+                <input
+                  type="time"
+                  required
+                  value={form.startTime}
+                  onChange={(e) => set('startTime', e.target.value)}
+                />
+              </label>
+            )}
+          </div>
+          <div className="field-row">
+            <label className="field">
+              <span>Fin</span>
+              <input
+                type="date"
+                required
+                value={form.endDate}
+                onChange={(e) => set('endDate', e.target.value)}
+              />
+            </label>
+            {!form.allDay && (
+              <label className="field">
+                <span className="sr-only">Hora de fin</span>
+                <input
+                  type="time"
+                  required
+                  value={form.endTime}
+                  onChange={(e) => set('endTime', e.target.value)}
+                />
+              </label>
+            )}
+          </div>
+
+          <div className="field-row">
+            {!editing && (
+              <label className="field">
+                <span>Calendario</span>
+                <select value={form.calendarId} onChange={(e) => set('calendarId', e.target.value)}>
+                  {calendars.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="field">
+              <span>Estado</span>
+              <select
+                value={form.status}
+                onChange={(e) => set('status', e.target.value as FormState['status'])}
+              >
+                {Object.entries(STATUS_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
                   </option>
                 ))}
               </select>
             </label>
-          )}
+          </div>
+
           <label className="field">
-            <span>Estado</span>
-            <select
-              value={form.status}
-              onChange={(e) => set('status', e.target.value as FormState['status'])}
-            >
-              {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        <label className="field">
-          <span>Ubicación</span>
-          <input
-            value={form.location}
-            onChange={(e) => set('location', e.target.value)}
-            maxLength={500}
-          />
-        </label>
-
-        <label className="field">
-          <span>Descripción</span>
-          <textarea
-            rows={3}
-            value={form.description}
-            onChange={(e) => set('description', e.target.value)}
-          />
-        </label>
-
-        <fieldset className="field swatches">
-          <legend>Color</legend>
-          <button
-            type="button"
-            className="swatch swatch-auto"
-            aria-label="Color del calendario"
-            aria-pressed={form.color === null}
-            onClick={() => set('color', null)}
-          >
-            auto
-          </button>
-          {PALETTE.map((color) => (
-            <button
-              key={color}
-              type="button"
-              className="swatch"
-              style={{ background: color }}
-              aria-label={color}
-              aria-pressed={form.color === color}
-              onClick={() => set('color', color)}
+            <span>Ubicación</span>
+            <input
+              value={form.location}
+              onChange={(e) => set('location', e.target.value)}
+              maxLength={500}
             />
-          ))}
-        </fieldset>
+          </label>
 
-        {error && (
-          <p role="alert" className="form-error">
-            {error}
-          </p>
-        )}
+          <label className="field">
+            <span>Descripción</span>
+            <textarea
+              rows={3}
+              value={form.description}
+              onChange={(e) => set('description', e.target.value)}
+            />
+          </label>
 
-        <div className="form-actions">
-          {editing && (
+          <fieldset className="field swatches">
+            <legend>Color</legend>
             <button
               type="button"
-              className="btn btn-danger"
-              disabled={busy}
-              onClick={() => {
-                if (window.confirm(`¿Eliminar «${editing.title}»?`)) {
-                  void run(() => api.deleteEvent(editing.id));
-                }
-              }}
+              className="swatch swatch-auto"
+              aria-label="Color del calendario"
+              aria-pressed={form.color === null}
+              onClick={() => set('color', null)}
             >
-              Eliminar
+              auto
             </button>
+            {PALETTE.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className="swatch"
+                style={{ background: color }}
+                aria-label={color}
+                aria-pressed={form.color === color}
+                onClick={() => set('color', color)}
+              />
+            ))}
+          </fieldset>
+
+          {error && (
+            <p role="alert" className="form-error">
+              {error}
+            </p>
           )}
-          <span className="spacer" />
-          <button type="button" className="btn" onClick={onClose}>
-            Cancelar
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
-            Guardar
-          </button>
-        </div>
-      </form>
+
+          <div className="form-actions">
+            {editing && (
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={busy}
+                onClick={() => {
+                  if (window.confirm(`¿Eliminar «${editing.title}»?`)) {
+                    void run(async () => {
+                      await api.deleteEvent(editing.id);
+                      return { kind: 'deleted', event: editing };
+                    });
+                  }
+                }}
+              >
+                Eliminar
+              </button>
+            )}
+            {editing && (
+              <button type="button" className="btn" onClick={() => setShowHistory(true)}>
+                Historial
+              </button>
+            )}
+            <span className="spacer" />
+            <button type="button" className="btn" onClick={onClose}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={busy}>
+              Guardar
+            </button>
+          </div>
+        </form>
+      )}
     </dialog>
   );
 }

@@ -3,6 +3,8 @@ import type {
   CalendarDto,
   CreateEventInput,
   EventDto,
+  EventVersionDto,
+  RestoreEventInput,
   UpdateEventInput,
 } from '@calendar/shared';
 
@@ -47,4 +49,7 @@ export const api = {
   updateEvent: (id: string, input: UpdateEventInput) =>
     request<EventDto>('PATCH', `/events/${id}`, input),
   deleteEvent: (id: string) => request<void>('DELETE', `/events/${id}`),
+  listVersions: (id: string) => request<EventVersionDto[]>('GET', `/events/${id}/versions`),
+  restoreEvent: (id: string, version: number, input: RestoreEventInput = {}) =>
+    request<EventDto>('POST', `/events/${id}/restore/${version}`, input),
 };

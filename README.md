@@ -1,7 +1,7 @@
 # Personal Calendar
 
-Calendario personal con historial de versiones de eventos. Los requisitos del MVP están en
-[`MVP.txt`](MVP.txt); las decisiones de arquitectura, en [`docs/`](docs/).
+Calendario personal con historial de versiones de eventos. Las decisiones de arquitectura están en
+[`docs/`](docs/).
 
 ## Requisitos
 

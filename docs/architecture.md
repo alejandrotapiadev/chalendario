@@ -48,6 +48,10 @@ necesidad real lo pida (recordatorios → worker; caché → Redis).
 - **Logging:** pino (integrado en Fastify), JSON en producción, `pino-pretty` en desarrollo.
 - **Salud:** `GET /health` comprueba la conexión a PostgreSQL (503 si falla).
 - **Migraciones:** SQL puro en `migrations/` (ver ADR-004).
+- **Recurrencia:** una regla en el evento y ocurrencias calculadas al consultar, en el dominio
+  puro (ADR-008).
+- **Recordatorios:** calculados al consultar y consultados por el cliente cada 30 s, sin cola ni
+  worker (ADR-009). El módulo `reminders` lee de `events` a través de su repositorio.
 - **Testing:** Vitest; unitarios junto al código, integración en `tests/`.
 - **CI:** GitHub Actions (`.github/workflows/ci.yml`): formato, lint, typecheck, tests con
   PostgreSQL real y build.

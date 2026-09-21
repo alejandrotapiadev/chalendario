@@ -1,7 +1,6 @@
 # Modelo de datos
 
-> Estado: implementado hasta la fase 2 (migraciones 002–006; el versionado no necesitó
-> ninguna nueva). Recordatorios y recurrencia son diseño para la fase 3.
+> Estado: implementado hasta la fase 3 (migraciones 002–010).
 > Regla clave (ADR-002): **cada modificación de un evento crea una nueva versión; las
 > versiones nunca se modifican.**
 
@@ -11,6 +10,7 @@
 users:     id, email (citext, único), name, password_hash (scrypt), created_at, updated_at
 calendars: id, user_id -> users, name, color (#rrggbb), created_at, updated_at
 sessions:  id, user_id -> users (ON DELETE CASCADE), token_hash (SHA-256, único), created_at, expires_at
+categories: id, user_id -> users, name (citext, único por usuario), color (#rrggbb), created_at, updated_at
 ```
 
 Un evento pertenece a un calendario y un calendario a un usuario: toda consulta de eventos
@@ -27,7 +27,9 @@ events                          event_versions
 - created_at                    - start_at / end_at (timestamptz, end > start)
 - updated_at                    - timezone (IANA), all_day
                                 - status: confirmed | tentative | cancelled
-                                - color (nulo = el del calendario)
+                                - color (nulo = el de la categoría o el calendario)
+                                - category_id -> categories (nulo = sin categoría)
+                                - recurrence (jsonb; nulo = no se repite)
                                 - deleted
                                 - created_at, created_by -> users
                                 - change_reason
@@ -80,16 +82,46 @@ necesitan un caso especial.
 Consulta por rango `[from, to)`: eventos vigentes, no borrados, con
 `start_at < to AND end_at > from` (un evento que termina justo en `from` no se incluye).
 
-## Recordatorios (fase 3)
+### Categorías
+
+Cada evento puede tener una categoría (`category_id`, parte del contenido versionado: cambiarla
+crea versión y sale en el historial). Se crean y se renombran/recolorean, pero **no se borran**:
+las versiones son inmutables y la referencian. El color de un evento se resuelve como color
+propio, si no el de su categoría y, si no, el de su calendario.
+
+## Recurrencia: series y ocurrencias
+
+Un evento recurrente es **un solo evento** cuya versión vigente lleva la regla en `recurrence`
+(ADR-008); no hay filas por ocurrencia. `start_at`/`end_at` son los de la primera ocurrencia y
+el resto se calcula al consultar con `expandOccurrences` (`packages/domain`).
 
 ```
-event_reminders: id, event_id, minutes_before, channel
+recurrence = { freq: 'daily' | 'weekly' | 'monthly',
+               interval,              -- cada N días/semanas/meses (1–99)
+               byWeekday?,            -- solo weekly; 0 = lunes … 6 = domingo
+               until? | count? }      -- excluyentes; sin ninguno, no termina
 ```
 
-MVP: canal `in_app`.
+- `GET /events?from&to` expande las series a ocurrencias (mismo `id`, inicio y fin propios).
+  `GET /events/:id` devuelve la serie tal como está definida.
+- Editar, borrar, restaurar y el historial afectan a **toda la serie**. Cambiar la regla es
+  una versión más y el historial la describe.
+- Excepciones («solo este martes»): pendiente. Se modelarán como un evento propio con
+  `events.series_id` (ya existente) y la fecha original de la ocurrencia que sustituye.
 
-## Eventos vs. ocurrencias (fase 3)
+## Recordatorios
 
-Una recurrencia no son N eventos independientes. MVP: `events.series_id` nullable (ya existe,
-sin uso). Fase posterior: `event_series` (regla de recurrencia, zona horaria) y
-`event_occurrences`.
+```
+event_reminders: id, event_id -> events (ON DELETE CASCADE), minutes_before (0–40320),
+                 channel ('in_app'), created_at; único (event_id, minutes_before, channel)
+```
+
+No forman parte del contenido versionado (cambiarlos no crea versión; restaurar no los toca). En
+una serie se aplican a cada ocurrencia. `GET /reminders/active` calcula al vuelo los avisos cuya
+hora ya pasó y cuya ocurrencia no ha terminado (ADR-009).
+
+## Búsqueda
+
+`GET /events/search?q=` busca en título, descripción y ubicación con `unaccent` + `ILIKE`
+(sin distinguir mayúsculas ni acentos; `%` y `_` se tratan como texto). Recorre cualquier fecha,
+usa el contenido vigente y devuelve cada serie una sola vez.

@@ -501,6 +501,35 @@ textarea {
   flex: 1;
 }
 
+/* ---------- Acceso ---------- */
+
+.auth {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 16px;
+}
+.auth-card {
+  width: min(380px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.auth-card h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+.auth-card p {
+  margin: 0;
+}
+.link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
 /* ---------- Historial y avisos ---------- */
 
 .muted {

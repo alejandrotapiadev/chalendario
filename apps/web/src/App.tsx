@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { CalendarDto, EventDto } from '@calendar/shared';
+import type { CalendarDto, EventDto, UserDto } from '@calendar/shared';
 import { ApiError, api } from './api.ts';
 import {
   shiftCursor,
@@ -59,7 +59,12 @@ function nextFullHour(): Date {
   return d;
 }
 
-export function App() {
+interface AppProps {
+  user: UserDto;
+  onLogout: () => void;
+}
+
+export function App({ user, onLogout }: AppProps) {
   const [view, setView] = useState<ViewMode>('month');
   const [cursor, setCursor] = useState(() => new Date());
   const [calendars, setCalendars] = useState<CalendarDto[]>([]);
@@ -164,6 +169,8 @@ export function App() {
         onNext={() => setCursor(shiftCursor(view, cursor, 1))}
         onToday={() => setCursor(new Date())}
         onCreate={() => openCreate(nextFullHour())}
+        user={user}
+        onLogout={onLogout}
       />
       {error && (
         <div role="alert" className="banner-error">

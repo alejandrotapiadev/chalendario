@@ -1,3 +1,4 @@
+import type { UserDto } from '@calendar/shared';
 import { viewTitle, type ViewMode } from '../calendar/dates.ts';
 
 const VIEWS: { mode: ViewMode; label: string }[] = [
@@ -14,9 +15,21 @@ interface Props {
   onNext: () => void;
   onToday: () => void;
   onCreate: () => void;
+  user: UserDto;
+  onLogout: () => void;
 }
 
-export function Toolbar({ view, cursor, onViewChange, onPrev, onNext, onToday, onCreate }: Props) {
+export function Toolbar({
+  view,
+  cursor,
+  onViewChange,
+  onPrev,
+  onNext,
+  onToday,
+  onCreate,
+  user,
+  onLogout,
+}: Props) {
   return (
     <header className="toolbar">
       <h1 className="toolbar-title">{viewTitle(view, cursor)}</h1>
@@ -47,6 +60,9 @@ export function Toolbar({ view, cursor, onViewChange, onPrev, onNext, onToday, o
         </div>
         <button type="button" className="btn btn-primary" onClick={onCreate}>
           + Evento
+        </button>
+        <button type="button" className="btn" title={user.email} onClick={onLogout}>
+          Salir
         </button>
       </div>
     </header>

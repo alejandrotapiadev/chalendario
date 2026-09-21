@@ -4,6 +4,9 @@ import type {
   CreateEventInput,
   EventDto,
   EventVersionDto,
+  LoginInput,
+  RegisterInput,
+  UserDto,
   RestoreEventInput,
   UpdateEventInput,
 } from '@calendar/shared';
@@ -25,12 +28,22 @@ export class ApiError extends Error {
   }
 }
 
+let onUnauthorized: (() => void) | null = null;
+
+/** Se llama cuando la API responde 401 fuera del formulario de acceso (sesión caducada). */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
+}
+
+const AUTH_FORM_PATHS = ['/auth/login', '/auth/register'];
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401 && !AUTH_FORM_PATHS.includes(path)) onUnauthorized?.();
   if (!res.ok) {
     const errorBody = (await res.json().catch(() => null)) as ApiErrorBody | null;
     throw new ApiError(res.status, errorBody);
@@ -39,6 +52,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
+  me: () => request<UserDto>('GET', '/auth/me'),
+  register: (input: RegisterInput) => request<UserDto>('POST', '/auth/register', input),
+  login: (input: LoginInput) => request<UserDto>('POST', '/auth/login', input),
+  logout: () => request<void>('POST', '/auth/logout'),
   listCalendars: () => request<CalendarDto[]>('GET', '/calendars'),
   listEvents: (from: Date, to: Date) =>
     request<EventDto[]>(

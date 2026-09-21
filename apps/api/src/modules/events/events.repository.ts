@@ -20,6 +20,8 @@ interface ContentRow {
 
 export interface EventRow extends ContentRow {
   id: string;
+  /** UID externo (importación / sincronización), o null en los eventos creados aquí. */
+  uid: string | null;
   calendar_id: string;
   series_id: string | null;
   version: number;
@@ -38,7 +40,7 @@ export interface VersionRow extends ContentRow {
 // Estado actual = fila de `events` + su versión vigente. El join con `calendars` acota
 // todas las consultas a los eventos del usuario.
 const CURRENT_EVENTS = `
-  SELECT e.id, e.calendar_id, e.series_id, e.current_version AS version,
+  SELECT e.id, e.uid, e.calendar_id, e.series_id, e.current_version AS version,
          e.created_at, e.updated_at,
          v.title, v.description, v.start_at, v.end_at, v.timezone, v.all_day,
          v.location, v.status, v.color, v.recurrence, v.category_id, v.deleted,
@@ -228,12 +230,68 @@ export async function listReminderCandidates(
   return rows;
 }
 
-export async function insertEvent(db: Queryable, calendarId: string): Promise<string> {
+export async function insertEvent(
+  db: Queryable,
+  calendarId: string,
+  uid: string | null = null,
+): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
-    'INSERT INTO events (calendar_id) VALUES ($1) RETURNING id',
-    [calendarId],
+    'INSERT INTO events (calendar_id, uid) VALUES ($1, $2) RETURNING id',
+    [calendarId, uid],
   );
   return rows[0]!.id;
+}
+
+/** Evento de ese calendario con ese UID externo (borrado o no). */
+export async function findEventIdByUid(
+  db: Queryable,
+  calendarId: string,
+  uid: string,
+): Promise<string | null> {
+  const { rows } = await db.query<{ id: string }>(
+    'SELECT id FROM events WHERE calendar_id = $1 AND uid = $2',
+    [calendarId, uid],
+  );
+  return rows[0]?.id ?? null;
+}
+
+export async function eventExistsInCalendar(
+  db: Queryable,
+  calendarId: string,
+  eventId: string,
+): Promise<boolean> {
+  const { rowCount } = await db.query('SELECT 1 FROM events WHERE calendar_id = $1 AND id = $2', [
+    calendarId,
+    eventId,
+  ]);
+  return rowCount === 1;
+}
+
+/** Todos los eventos vivos de un calendario (series sin expandir). El llamador ya comprobó el acceso. */
+export async function listCalendarEventRows(
+  db: Queryable,
+  calendarId: string,
+): Promise<EventRow[]> {
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS} WHERE e.calendar_id = $1 AND NOT v.deleted ORDER BY v.start_at, e.id`,
+    [calendarId],
+  );
+  return rows;
+}
+
+/** Eventos vivos con UID externo de un calendario, para saber cuáles ya no están en el origen. */
+export async function listLiveUidRows(
+  db: Queryable,
+  calendarId: string,
+): Promise<{ id: string; uid: string }[]> {
+  const { rows } = await db.query<{ id: string; uid: string }>(
+    `SELECT e.id, e.uid
+       FROM events e
+       JOIN event_versions v ON v.event_id = e.id AND v.version = e.current_version
+      WHERE e.calendar_id = $1 AND e.uid IS NOT NULL AND NOT v.deleted`,
+    [calendarId],
+  );
+  return rows;
 }
 
 export interface NewVersion {

@@ -7,9 +7,16 @@ interface CalendarRow {
   color: string;
   created_at: Date;
   updated_at: Date;
+  sub_url: string | null;
+  last_synced_at: Date | null;
+  last_error: string | null;
 }
 
-const COLUMNS = 'id, name, color, created_at, updated_at';
+const SELECT = `
+  SELECT c.id, c.name, c.color, c.created_at, c.updated_at,
+         s.url AS sub_url, s.last_synced_at, s.last_error
+    FROM calendars c
+    LEFT JOIN calendar_subscriptions s ON s.calendar_id = c.id`;
 
 function toDto(row: CalendarRow): CalendarDto {
   return {
@@ -18,15 +25,35 @@ function toDto(row: CalendarRow): CalendarDto {
     color: row.color,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    // De la URL solo se expone el dominio: puede llevar un secreto en la ruta.
+    subscription: row.sub_url
+      ? {
+          host: new URL(row.sub_url).hostname,
+          lastSyncedAt: row.last_synced_at?.toISOString() ?? null,
+          lastError: row.last_error,
+        }
+      : null,
   };
 }
 
 export async function listCalendars(db: Queryable, userId: string): Promise<CalendarDto[]> {
   const { rows } = await db.query<CalendarRow>(
-    `SELECT ${COLUMNS} FROM calendars WHERE user_id = $1 ORDER BY created_at, name`,
+    `${SELECT} WHERE c.user_id = $1 ORDER BY c.created_at, c.name`,
     [userId],
   );
   return rows.map(toDto);
+}
+
+export async function getCalendar(
+  db: Queryable,
+  userId: string,
+  id: string,
+): Promise<CalendarDto | null> {
+  const { rows } = await db.query<CalendarRow>(`${SELECT} WHERE c.id = $1 AND c.user_id = $2`, [
+    id,
+    userId,
+  ]);
+  return rows[0] ? toDto(rows[0]) : null;
 }
 
 export async function insertCalendar(
@@ -34,12 +61,12 @@ export async function insertCalendar(
   userId: string,
   input: { name: string; color?: string | undefined },
 ): Promise<CalendarDto> {
-  const { rows } = await db.query<CalendarRow>(
+  const { rows } = await db.query<{ id: string }>(
     `INSERT INTO calendars (user_id, name, color) VALUES ($1, $2, COALESCE($3, '#3b82f6'))
-     RETURNING ${COLUMNS}`,
+     RETURNING id`,
     [userId, input.name, input.color ?? null],
   );
-  return toDto(rows[0]!);
+  return (await getCalendar(db, userId, rows[0]!.id))!;
 }
 
 export async function updateCalendar(
@@ -48,14 +75,13 @@ export async function updateCalendar(
   id: string,
   input: { name?: string | undefined; color?: string | undefined },
 ): Promise<CalendarDto | null> {
-  const { rows } = await db.query<CalendarRow>(
+  const { rowCount } = await db.query(
     `UPDATE calendars
         SET name = COALESCE($3, name), color = COALESCE($4, color), updated_at = now()
-      WHERE id = $1 AND user_id = $2
-      RETURNING ${COLUMNS}`,
+      WHERE id = $1 AND user_id = $2`,
     [id, userId, input.name ?? null, input.color ?? null],
   );
-  return rows[0] ? toDto(rows[0]) : null;
+  return rowCount === 1 ? getCalendar(db, userId, id) : null;
 }
 
 export async function calendarBelongsToUser(
@@ -67,5 +93,14 @@ export async function calendarBelongsToUser(
     calendarId,
     userId,
   ]);
+  return rowCount === 1;
+}
+
+/** ¿El calendario refleja una URL externa? Entonces sus eventos son de solo lectura. */
+export async function isSubscribed(db: Queryable, calendarId: string): Promise<boolean> {
+  const { rowCount } = await db.query(
+    'SELECT 1 FROM calendar_subscriptions WHERE calendar_id = $1',
+    [calendarId],
+  );
   return rowCount === 1;
 }

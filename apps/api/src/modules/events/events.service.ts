@@ -17,7 +17,7 @@ import type {
 } from '@calendar/shared';
 import { withTransaction, type Db, type Queryable } from '../../db.ts';
 import { ConflictError, NotFoundError } from '../../errors.ts';
-import { calendarBelongsToUser } from '../calendars/calendars.repository.ts';
+import { calendarBelongsToUser, isSubscribed } from '../calendars/calendars.repository.ts';
 import { categoryBelongsToUser } from '../categories/categories.repository.ts';
 import {
   findCurrent,
@@ -41,7 +41,7 @@ import {
 // las versiones nunca se modifican. Todas las escrituras de este servicio pasan por
 // `appendVersion`, dentro de una transacción con la fila del evento bloqueada.
 
-async function appendVersion(
+export async function appendVersion(
   tx: Queryable,
   row: EventRow,
   next: { fields: EventFields; deleted: boolean; changeReason: string | null },
@@ -58,6 +58,40 @@ async function appendVersion(
   });
   await setCurrentVersion(tx, row.id, version);
   return (await findCurrent(tx, userId, row.id))!;
+}
+
+/**
+ * Los calendarios suscritos a una URL los gestiona la sincronización: editarlos a mano se
+ * perdería en la siguiente sincronización, así que se rechaza.
+ */
+async function assertWritable(tx: Queryable, calendarId: string): Promise<void> {
+  if (await isSubscribed(tx, calendarId)) {
+    throw new ConflictError(
+      'calendar_read_only',
+      'Este calendario está sincronizado con una URL y es de solo lectura',
+    );
+  }
+}
+
+/** Crea el evento y su versión 1 (y opcionalmente UID y recordatorios) en la transacción dada. */
+export async function insertNewEvent(
+  tx: Queryable,
+  userId: string,
+  calendarId: string,
+  fields: EventFields,
+  opts: { reminders?: number[] | undefined; uid?: string | null; changeReason?: string } = {},
+): Promise<string> {
+  const id = await insertEvent(tx, calendarId, opts.uid ?? null);
+  await insertVersion(tx, {
+    eventId: id,
+    version: 1,
+    fields,
+    deleted: false,
+    createdBy: userId,
+    changeReason: opts.changeReason ?? null,
+  });
+  if (opts.reminders?.length) await replaceReminders(tx, id, uniqueSorted(opts.reminders));
+  return id;
 }
 
 /** Evento existente, no borrado y bloqueado para escritura; 404 en cualquier otro caso. */
@@ -153,18 +187,10 @@ export async function createEvent(
     if (!(await calendarBelongsToUser(tx, userId, calendarId))) {
       throw new NotFoundError('Calendario');
     }
+    await assertWritable(tx, calendarId);
     await assertCategoryOwned(tx, userId, fields.categoryId);
 
-    const id = await insertEvent(tx, calendarId);
-    await insertVersion(tx, {
-      eventId: id,
-      version: 1,
-      fields,
-      deleted: false,
-      createdBy: userId,
-      changeReason: null,
-    });
-    if (reminders?.length) await replaceReminders(tx, id, uniqueSorted(reminders));
+    const id = await insertNewEvent(tx, userId, calendarId, fields, { reminders });
     return rowToDto((await findCurrent(tx, userId, id))!);
   });
 }
@@ -184,6 +210,7 @@ export async function updateEvent(
 
   return withTransaction(db, async (tx) => {
     const row = await lockLiveEvent(tx, userId, id);
+    await assertWritable(tx, row.calendar_id);
     if (expectedVersion !== undefined && expectedVersion !== row.version) {
       throw new ConflictError(
         'version_conflict',
@@ -215,6 +242,7 @@ export async function updateEvent(
 export async function deleteEvent(db: Db, userId: string, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
     const row = await lockLiveEvent(tx, userId, id);
+    await assertWritable(tx, row.calendar_id);
     await appendVersion(
       tx,
       row,
@@ -287,6 +315,7 @@ export async function restoreVersion(
   return withTransaction(db, async (tx) => {
     const row = await findCurrent(tx, userId, id, { lock: true });
     if (!row) throw new NotFoundError('Evento');
+    await assertWritable(tx, row.calendar_id);
     if (expectedVersion !== undefined && expectedVersion !== row.version) {
       throw new ConflictError(
         'version_conflict',

@@ -2,7 +2,11 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dropEverything, migrate, testDatabaseUrl } from './helpers/db.ts';
 
+// Se compara ordenado en JS: el orden de `ORDER BY` de Postgres depende de la configuración
+// regional y trata distinto los guiones bajos.
 const TABLES = [
+  'calendar_feeds',
+  'calendar_subscriptions',
   'calendars',
   'categories',
   'event_reminders',
@@ -10,7 +14,7 @@ const TABLES = [
   'events',
   'sessions',
   'users',
-];
+].sort();
 
 // Requiere PostgreSQL: `pnpm db:up` en local; en CI lo aporta un service container.
 describe.skipIf(!testDatabaseUrl)('migraciones', () => {
@@ -21,7 +25,7 @@ describe.skipIf(!testDatabaseUrl)('migraciones', () => {
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = 'public' AND table_name <> 'pgmigrations' ORDER BY table_name`,
     );
-    return rows.map((r) => r.table_name);
+    return rows.map((r) => r.table_name).sort();
   };
 
   beforeAll(async () => {

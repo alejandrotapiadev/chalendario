@@ -22,4 +22,12 @@ export interface CalendarDto {
   color: string;
   createdAt: string;
   updatedAt: string;
+  /** Si refleja una URL `.ics` externa (entonces es de solo lectura), datos de la suscripción. */
+  subscription: {
+    /** Dominio de la URL; el resto puede contener un secreto y no se devuelve. */
+    host: string;
+    lastSyncedAt: string | null;
+    /** Error de la última sincronización, o null si fue bien. */
+    lastError: string | null;
+  } | null;
 }

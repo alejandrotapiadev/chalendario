@@ -11,5 +11,7 @@ export default defineConfig({
   test: {
     include: ['apps/**/*.test.ts', 'packages/**/*.test.ts', 'tests/**/*.test.ts'],
     env: { NODE_ENV: 'test' },
+    // Los tests de integración comparten una única base de datos.
+    fileParallelism: false,
   },
 });

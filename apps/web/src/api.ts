@@ -1,6 +1,8 @@
 import type {
   ApiErrorBody,
   CalendarDto,
+  CreateCalendarInput,
+  UpdateCalendarInput,
   CreateEventInput,
   EventDto,
   EventVersionDto,
@@ -57,6 +59,9 @@ export const api = {
   login: (input: LoginInput) => request<UserDto>('POST', '/auth/login', input),
   logout: () => request<void>('POST', '/auth/logout'),
   listCalendars: () => request<CalendarDto[]>('GET', '/calendars'),
+  createCalendar: (input: CreateCalendarInput) => request<CalendarDto>('POST', '/calendars', input),
+  updateCalendar: (id: string, input: UpdateCalendarInput) =>
+    request<CalendarDto>('PATCH', `/calendars/${id}`, input),
   listEvents: (from: Date, to: Date) =>
     request<EventDto[]>(
       'GET',

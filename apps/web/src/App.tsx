@@ -11,7 +11,9 @@ import {
 import { EventDialog, type ChangeInfo, type DialogTarget } from './components/EventDialog.tsx';
 import { MonthView } from './components/MonthView.tsx';
 import { TimeGridView } from './components/TimeGridView.tsx';
+import { Sidebar } from './components/Sidebar.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
+import { loadStringSet, saveStringSet } from './storage.ts';
 
 const FALLBACK_COLOR = '#3b82f6';
 const TOAST_MS = 8000;
@@ -73,6 +75,9 @@ export function App({ user, onLogout }: AppProps) {
   const [dialog, setDialog] = useState<DialogTarget | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const hiddenKey = `hiddenCalendars:${user.id}`;
+  const [hiddenCalendars, setHiddenCalendars] = useState(() => loadStringSet(hiddenKey));
 
   const range = visibleRange(view, cursor);
   const from = range.from.getTime();
@@ -138,6 +143,28 @@ export function App({ user, onLogout }: AppProps) {
     [calendarColors],
   );
 
+  const toggleCalendar = (id: string) => {
+    const next = new Set(hiddenCalendars);
+    if (!next.delete(id)) next.add(id);
+    setHiddenCalendars(next);
+    saveStringSet(hiddenKey, next);
+  };
+
+  const createCalendar = async (input: { name: string; color: string }) => {
+    const created = await api.createCalendar(input);
+    setCalendars((list) => [...list, created]);
+  };
+
+  const updateCalendar = async (id: string, input: { name: string; color: string }) => {
+    const updated = await api.updateCalendar(id, input);
+    setCalendars((list) => list.map((c) => (c.id === id ? updated : c)));
+  };
+
+  const visibleEvents = useMemo(
+    () => events.filter((e) => !hiddenCalendars.has(e.calendarId)),
+    [events, hiddenCalendars],
+  );
+
   /** Abre el diálogo y retira el aviso anterior, que quedaría oculto tras él. */
   const openDialog = (target: DialogTarget) => {
     setToast(null);
@@ -171,36 +198,47 @@ export function App({ user, onLogout }: AppProps) {
         onCreate={() => openCreate(nextFullHour())}
         user={user}
         onLogout={onLogout}
+        onToggleSidebar={() => setSidebarOpen((open) => !open)}
       />
       {error && (
         <div role="alert" className="banner-error">
           {error}
         </div>
       )}
-      <main className="view">
-        {view === 'month' && (
-          <MonthView
-            cursor={cursor}
-            events={events}
-            colorOf={colorOf}
-            onSelectDay={goToDay}
-            onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
-            onCreateOn={(day) => openCreate(day, true)}
-          />
-        )}
-        {view !== 'month' && (
-          <TimeGridView
-            // Al cambiar de vista/fecha se reinicia el scroll a la mañana.
-            key={`${view}-${from}`}
-            days={view === 'week' ? weekDays(cursor) : [startOfDay(cursor)]}
-            events={events}
-            colorOf={colorOf}
-            onSelectDay={goToDay}
-            onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
-            onCreateAt={(start) => openCreate(start)}
-          />
-        )}
-      </main>
+      <div className="layout">
+        <Sidebar
+          open={sidebarOpen}
+          calendars={calendars}
+          hiddenCalendars={hiddenCalendars}
+          onToggleCalendar={toggleCalendar}
+          onCreateCalendar={createCalendar}
+          onUpdateCalendar={updateCalendar}
+        />
+        <main className="view">
+          {view === 'month' && (
+            <MonthView
+              cursor={cursor}
+              events={visibleEvents}
+              colorOf={colorOf}
+              onSelectDay={goToDay}
+              onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
+              onCreateOn={(day) => openCreate(day, true)}
+            />
+          )}
+          {view !== 'month' && (
+            <TimeGridView
+              // Al cambiar de vista/fecha se reinicia el scroll a la mañana.
+              key={`${view}-${from}`}
+              days={view === 'week' ? weekDays(cursor) : [startOfDay(cursor)]}
+              events={visibleEvents}
+              colorOf={colorOf}
+              onSelectDay={goToDay}
+              onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
+              onCreateAt={(start) => openCreate(start)}
+            />
+          )}
+        </main>
+      </div>
       {toast && (
         <div role="status" className="toast" key={toast.id}>
           <span>{toast.message}</span>

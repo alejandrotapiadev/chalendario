@@ -17,6 +17,7 @@ interface Props {
   onCreate: () => void;
   user: UserDto;
   onLogout: () => void;
+  onToggleSidebar: () => void;
 }
 
 export function Toolbar({
@@ -29,10 +30,21 @@ export function Toolbar({
   onCreate,
   user,
   onLogout,
+  onToggleSidebar,
 }: Props) {
   return (
     <header className="toolbar">
-      <h1 className="toolbar-title">{viewTitle(view, cursor)}</h1>
+      <div className="toolbar-left">
+        <button
+          type="button"
+          className="btn btn-menu"
+          aria-label="Calendarios"
+          onClick={onToggleSidebar}
+        >
+          ☰
+        </button>
+        <h1 className="toolbar-title">{viewTitle(view, cursor)}</h1>
+      </div>
       <div className="toolbar-controls">
         <button type="button" className="btn" onClick={onToday}>
           Hoy

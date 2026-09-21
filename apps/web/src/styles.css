@@ -1092,6 +1092,23 @@ a.btn {
   color: inherit;
 }
 
+.conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg));
+}
+.conflict p {
+  margin: 0;
+}
+.conflict ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 /* ---------- Móvil ---------- */
 
 @media (max-width: 800px) {

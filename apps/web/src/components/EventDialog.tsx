@@ -6,17 +6,23 @@ import type {
   EventDto,
   UpdateEventInput,
 } from '@calendar/shared';
+import { describeChanges, weekdayIn, type EventSnapshot } from '@calendar/domain';
 import { ApiError, api } from '../api.ts';
 import {
-  addDays,
   browserTimezone,
   fromInputs,
-  startOfDay,
   toDateInput,
   toTimeInput,
   weekdayIndex,
 } from '../calendar/dates.ts';
-import { STATUS_LABELS } from '../calendar/history.ts';
+import { STATUS_LABELS, describeChange } from '../calendar/history.ts';
+import {
+  availableTimezones,
+  fromWallFields,
+  isTimezone,
+  localEquivalent,
+  toWallFields,
+} from '../calendar/zoned.ts';
 import {
   DEFAULT_REPEAT_FORM,
   describeRule,
@@ -48,6 +54,34 @@ export type ChangeInfo =
   /** `event` es el estado justo antes de borrar. */
   | { kind: 'deleted'; event: EventDto };
 
+const TIMEZONES = availableTimezones();
+
+/** Contenido de un evento tal como lo entiende el dominio, para poder compararlo. */
+function snapshotOf(event: EventDto, override: UpdateEventInput = {}): EventSnapshot {
+  return {
+    title: override.title ?? event.title,
+    description: override.description ?? event.description,
+    startAt: new Date(override.startAt ?? event.startAt),
+    endAt: new Date(override.endAt ?? event.endAt),
+    timezone: override.timezone ?? event.timezone,
+    allDay: override.allDay ?? event.allDay,
+    location: override.location ?? event.location,
+    status: override.status ?? event.status,
+    color: override.color === undefined ? event.color : override.color,
+    recurrence: override.recurrence === undefined ? event.recurrence : override.recurrence,
+    categoryId: override.categoryId === undefined ? event.categoryId : override.categoryId,
+    deleted: false,
+  };
+}
+
+/** Otra persona (u otra pestaña) cambió el evento mientras se editaba. */
+interface Conflict {
+  /** Estado actual del evento, o `deleted` si ya no existe. */
+  latest: EventDto | 'deleted';
+  /** Lo que se intentó guardar. */
+  mine: UpdateEventInput;
+}
+
 const PALETTE = [
   '#ef4444',
   '#f97316',
@@ -74,6 +108,8 @@ interface FormState {
   title: string;
   calendarId: string;
   categoryId: string;
+  /** Zona horaria en la que se interpretan las fechas y horas del formulario. */
+  timezone: string;
   allDay: boolean;
   startDate: string;
   startTime: string;
@@ -94,6 +130,7 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
       title: '',
       calendarId: calendars[0]?.id ?? '',
       categoryId: '',
+      timezone: browserTimezone(),
       allDay,
       startDate: toDateInput(start),
       startTime: toTimeInput(start),
@@ -115,11 +152,9 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
     calendarId: event.calendarId,
     categoryId: event.categoryId ?? '',
     allDay: event.allDay,
-    startDate: toDateInput(start),
-    startTime: toTimeInput(start),
-    // En los eventos de todo el día el fin es exclusivo; el formulario muestra el último día.
-    endDate: toDateInput(event.allDay ? addDays(end, -1) : end),
-    endTime: toTimeInput(end),
+    timezone: event.timezone,
+    // Fecha y hora en la zona del propio evento (en los de todo el día el fin se muestra inclusivo).
+    ...toWallFields(start, end, event.allDay, event.timezone),
     location: event.location,
     description: event.description,
     color: event.color,
@@ -129,17 +164,9 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
   };
 }
 
-function toInstants(form: FormState): { start: Date; end: Date } {
-  if (form.allDay) {
-    return {
-      start: startOfDay(fromInputs(form.startDate)),
-      end: addDays(startOfDay(fromInputs(form.endDate)), 1),
-    };
-  }
-  return {
-    start: fromInputs(form.startDate, form.startTime),
-    end: fromInputs(form.endDate, form.endTime),
-  };
+/** Instantes que describe el formulario, o null si alguna fecha u hora no es válida. */
+function toInstants(form: FormState): { start: Date; end: Date } | null {
+  return fromWallFields(form, form.allDay, form.timezone);
 }
 
 export function EventDialog({
@@ -155,6 +182,7 @@ export function EventDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [conflict, setConflict] = useState<Conflict | null>(null);
   const editing = target.kind === 'edit' ? target.event : null;
   const isSeries = editing?.recurrence != null;
   const readOnly = readOnlyReason !== undefined;
@@ -166,13 +194,21 @@ export function EventDialog({
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  async function run(action: () => Promise<ChangeInfo>) {
+  async function run(
+    action: () => Promise<ChangeInfo>,
+    /** Devuelve true si el error se gestionó (no se muestra el mensaje genérico). */
+    handle?: (err: unknown) => Promise<boolean>,
+  ) {
     setBusy(true);
     setError(null);
     try {
       onChanged(await action());
       onClose();
     } catch (err) {
+      if (handle && (await handle(err))) {
+        setBusy(false);
+        return;
+      }
       setError(err instanceof ApiError ? err.userMessage : 'No se pudo conectar con el servidor');
       setBusy(false);
     }
@@ -180,7 +216,16 @@ export function EventDialog({
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const { start, end } = toInstants(form);
+    if (!isTimezone(form.timezone)) {
+      setError('Zona horaria desconocida: elige una de la lista (p. ej. Europe/Madrid)');
+      return;
+    }
+    const instants = toInstants(form);
+    if (!instants) {
+      setError('La fecha u hora no es válida');
+      return;
+    }
+    const { start, end } = instants;
     if (!(end > start)) {
       setError('El fin debe ser posterior al inicio');
       return;
@@ -190,28 +235,76 @@ export function EventDialog({
       description: form.description,
       startAt: start.toISOString(),
       endAt: end.toISOString(),
-      timezone: browserTimezone(),
+      timezone: form.timezone,
       allDay: form.allDay,
       location: form.location,
       status: form.status,
       color: form.color,
       categoryId: form.categoryId || null,
-      recurrence: ruleFromForm(form.repeat, weekdayIndex(start)),
+      recurrence: ruleFromForm(form.repeat, weekdayIn(start, form.timezone)),
       reminders: form.reminders,
     };
     if (editing) {
       const input: UpdateEventInput = { ...content, expectedVersion: editing.version };
-      void run(async () => ({
-        kind: 'updated',
-        event: await api.updateEvent(editing.id, input),
-        previousVersion: editing.version,
-      }));
+      void run(
+        async () => ({
+          kind: 'updated',
+          event: await api.updateEvent(editing.id, input),
+          previousVersion: editing.version,
+        }),
+        async (err) => {
+          if (!(err instanceof ApiError && err.body?.error === 'version_conflict')) return false;
+          try {
+            setConflict({ latest: await api.getEvent(editing.id), mine: input });
+          } catch (fetchErr) {
+            if (!(fetchErr instanceof ApiError && fetchErr.status === 404)) return false;
+            setConflict({ latest: 'deleted', mine: input });
+          }
+          return true;
+        },
+      );
     } else {
       const input: CreateEventInput = { ...content, calendarId: form.calendarId };
       void run(async () => ({ kind: 'created', event: await api.createEvent(input) }));
     }
   }
 
+  /** Guarda los cambios propios encima de la versión que hay ahora. */
+  const overwrite = () => {
+    if (!editing || !conflict || conflict.latest === 'deleted') return;
+    const { latest, mine } = conflict;
+    void run(async () => ({
+      kind: 'updated',
+      event: await api.updateEvent(editing.id, { ...mine, expectedVersion: latest.version }),
+      previousVersion: latest.version,
+    }));
+  };
+
+  /** Descarta los cambios propios: se cierra y la pantalla se recarga con lo que hay. */
+  const discard = () => {
+    if (conflict && conflict.latest !== 'deleted') {
+      onChanged({
+        kind: 'updated',
+        event: conflict.latest,
+        previousVersion: conflict.latest.version,
+      });
+    }
+    onClose();
+  };
+
+  const conflictChanges =
+    conflict && conflict.latest !== 'deleted'
+      ? describeChanges(snapshotOf(conflict.latest), snapshotOf(conflict.latest, conflict.mine))
+      : [];
+  const categoryContext = {
+    categoryName: (id: string) => categories.find((c) => c.id === id)?.name,
+  };
+
+  const zoneHint = localEquivalent(
+    toInstants(form)?.start ?? null,
+    form.timezone,
+    browserTimezone(),
+  );
   const startWeekday = weekdayIndex(fromInputs(form.startDate || toDateInput(new Date())));
 
   return (
@@ -315,6 +408,23 @@ export function EventDialog({
               )}
             </div>
 
+            <label className="field">
+              <span>Zona horaria</span>
+              <input
+                list="timezone-options"
+                aria-label="Zona horaria"
+                autoComplete="off"
+                value={form.timezone}
+                onChange={(e) => set('timezone', e.target.value)}
+              />
+              <datalist id="timezone-options">
+                {TIMEZONES.map((zone) => (
+                  <option key={zone} value={zone} />
+                ))}
+              </datalist>
+              {zoneHint && <span className="muted">{zoneHint}</span>}
+            </label>
+
             <RecurrenceFields
               value={form.repeat}
               onChange={(repeat) => set('repeat', repeat)}
@@ -410,6 +520,55 @@ export function EventDialog({
               ))}
             </fieldset>
           </fieldset>
+
+          {conflict && (
+            <div className="conflict" role="alert">
+              {conflict.latest === 'deleted' ? (
+                <p>
+                  <strong>Este evento se eliminó mientras lo editabas.</strong> Tus cambios no se
+                  pueden guardar. Puedes recuperarlo desde el aviso «Deshacer» de quien lo eliminó o
+                  desde su historial.
+                </p>
+              ) : (
+                <>
+                  <p>
+                    <strong>Este evento cambió mientras lo editabas</strong> (ahora está en la
+                    versión {conflict.latest.version}, y tú partías de la {editing?.version}).
+                  </p>
+                  {conflictChanges.length > 0 ? (
+                    <>
+                      <p className="muted">Si guardas tus cambios sobre la versión actual:</p>
+                      <ul>
+                        {conflictChanges.map((change) => (
+                          <li key={change.field}>{describeChange(change, categoryContext)}</li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="muted">Tus cambios coinciden con la versión actual.</p>
+                  )}
+                </>
+              )}
+              <div className="side-editor-row">
+                {conflict.latest !== 'deleted' && (
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    disabled={busy}
+                    onClick={overwrite}
+                  >
+                    Sobrescribir con mis cambios
+                  </button>
+                )}
+                <button type="button" className="btn btn-small" onClick={discard}>
+                  {conflict.latest === 'deleted' ? 'Cerrar' : 'Descartar los míos'}
+                </button>
+                <button type="button" className="btn btn-small" onClick={() => setConflict(null)}>
+                  Seguir editando
+                </button>
+              </div>
+            </div>
+          )}
 
           {error && (
             <p role="alert" className="form-error">

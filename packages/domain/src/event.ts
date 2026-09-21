@@ -1,3 +1,10 @@
+import {
+  normalizeRecurrence,
+  recurrenceKey,
+  validateRecurrence,
+  weekdayIn,
+  type RecurrenceRule,
+} from './recurrence.ts';
 import { isLocalMidnight, isValidTimezone } from './timezone.ts';
 
 export const EVENT_STATUSES = ['confirmed', 'tentative', 'cancelled'] as const;
@@ -17,6 +24,9 @@ export const COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
  * Los eventos de todo el día (`allDay`) se representan igual que los demás, como dos
  * instantes: `startAt` es la medianoche local del primer día y `endAt` la medianoche local
  * del día siguiente al último (fin exclusivo), ambas en `timezone`.
+ *
+ * Si tiene `recurrence`, `startAt`/`endAt` describen la **primera** ocurrencia y el resto se
+ * calcula con `expandOccurrences`; no se guardan filas por ocurrencia.
  */
 export interface EventFields {
   title: string;
@@ -28,6 +38,8 @@ export interface EventFields {
   location: string;
   status: EventStatus;
   color: string | null;
+  recurrence: RecurrenceRule | null;
+  categoryId: string | null;
 }
 
 export type EventPatch = Partial<EventFields>;
@@ -84,11 +96,25 @@ export function validateEventFields(fields: EventFields): string[] {
     }
   }
 
+  if (fields.recurrence !== null) {
+    issues.push(...validateRecurrence(fields.recurrence, fields.startAt, fields.timezone));
+  }
+
   return issues;
 }
 
 function normalize(fields: EventFields): EventFields {
-  return { ...fields, title: fields.title.trim() };
+  const usable = isValidTimezone(fields.timezone) && !Number.isNaN(fields.startAt.getTime());
+  return {
+    ...fields,
+    title: fields.title.trim(),
+    recurrence: fields.recurrence
+      ? normalizeRecurrence(
+          fields.recurrence,
+          usable ? weekdayIn(fields.startAt, fields.timezone) : null,
+        )
+      : null,
+  };
 }
 
 function assertValid(fields: EventFields): EventFields {
@@ -106,13 +132,16 @@ export function newEventFields(input: NewEventInput): EventFields {
     location: '',
     status: 'confirmed',
     color: null,
+    recurrence: null,
+    categoryId: null,
     ...withoutUndefined(input),
   });
 }
 
 /**
  * Aplica un cambio parcial sobre el contenido actual y valida el resultado completo.
- * Un campo `undefined` significa «no tocar»; `color: null` significa «quitar el color».
+ * Un campo `undefined` significa «no tocar»; `color: null` significa «quitar el color»;
+ * `recurrence: null`, «dejar de repetirse».
  */
 export function applyEventPatch(current: EventFields, patch: EventPatch): EventFields {
   return assertValid({ ...current, ...withoutUndefined(patch) });
@@ -128,7 +157,9 @@ export function hasChanges(a: EventFields, b: EventFields): boolean {
     a.allDay !== b.allDay ||
     a.location !== b.location ||
     a.status !== b.status ||
-    a.color !== b.color
+    a.color !== b.color ||
+    a.categoryId !== b.categoryId ||
+    recurrenceKey(a.recurrence) !== recurrenceKey(b.recurrence)
   );
 }
 

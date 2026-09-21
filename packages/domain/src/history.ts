@@ -1,4 +1,5 @@
 import type { EventFields } from './event.ts';
+import type { RecurrenceRule } from './recurrence.ts';
 
 /** Contenido de una versión: los campos del evento más su marca de borrado (ADR-005). */
 export interface EventSnapshot extends EventFields {
@@ -15,11 +16,13 @@ export const TRACKED_FIELDS = [
   'location',
   'status',
   'color',
+  'categoryId',
+  'recurrence',
   'deleted',
 ] as const;
 export type TrackedField = (typeof TRACKED_FIELDS)[number];
 
-export type FieldValue = string | boolean | null;
+export type FieldValue = string | boolean | null | RecurrenceRule;
 
 export interface FieldChange {
   field: TrackedField;
@@ -31,6 +34,12 @@ function comparable(snapshot: EventSnapshot, field: TrackedField): FieldValue {
   const value = snapshot[field];
   return value instanceof Date ? value.toISOString() : value;
 }
+
+// Las reglas de recurrencia son objetos: se comparan por contenido (están normalizadas).
+const sameValue = (a: FieldValue, b: FieldValue) =>
+  typeof a === 'object' || typeof b === 'object'
+    ? JSON.stringify(a) === JSON.stringify(b)
+    : a === b;
 
 /**
  * Qué cambió entre dos versiones consecutivas. Con `previous = null` (versión 1, la
@@ -46,7 +55,7 @@ export function describeChanges(
   for (const field of TRACKED_FIELDS) {
     const from = comparable(previous, field);
     const to = comparable(next, field);
-    if (from !== to) changes.push({ field, from, to });
+    if (!sameValue(from, to)) changes.push({ field, from, to });
   }
   return changes;
 }

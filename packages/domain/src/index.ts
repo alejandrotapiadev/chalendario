@@ -4,3 +4,4 @@ export * from './event.ts';
 export * from './history.ts';
 export * from './recurrence.ts';
 export { isValidTimezone, isLocalMidnight, wallClock, zonedTimeToInstant } from './timezone.ts';
+export * from './ics.ts';

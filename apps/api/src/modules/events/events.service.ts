@@ -1,7 +1,14 @@
-import { applyEventPatch, hasChanges, newEventFields, type EventPatch } from '@calendar/domain';
+import {
+  applyEventPatch,
+  describeChanges,
+  hasChanges,
+  newEventFields,
+  type EventPatch,
+} from '@calendar/domain';
 import type {
   CreateEventInput,
   EventDto,
+  EventVersionDto,
   ListEventsQuery,
   UpdateEventInput,
 } from '@calendar/shared';
@@ -10,13 +17,17 @@ import { ConflictError, NotFoundError } from '../../errors.ts';
 import { calendarBelongsToUser } from '../calendars/calendars.repository.ts';
 import {
   findCurrent,
+  findVersionRow,
   insertEvent,
   insertVersion,
   listCurrentInRange,
+  listVersionRows,
   rowToDto,
   rowToFields,
+  rowToSnapshot,
   setCurrentVersion,
   type EventRow,
+  type VersionRow,
 } from './events.repository.ts';
 
 // Regla del proyecto (ADR-002): cada modificación de un evento crea una versión nueva y
@@ -144,5 +155,88 @@ export async function deleteEvent(db: Db, userId: string, id: string): Promise<v
       { fields: rowToFields(row), deleted: true, changeReason: 'deleted' },
       userId,
     );
+  });
+}
+
+function toVersionDtos(eventId: string, rows: VersionRow[]): EventVersionDto[] {
+  const currentVersion = rows.at(-1)?.version;
+  return rows.map((row, i) => ({
+    eventId,
+    version: row.version,
+    isCurrent: row.version === currentVersion,
+    title: row.title,
+    description: row.description,
+    startAt: row.start_at.toISOString(),
+    endAt: row.end_at.toISOString(),
+    timezone: row.timezone,
+    allDay: row.all_day,
+    location: row.location,
+    status: row.status,
+    color: row.color,
+    deleted: row.deleted,
+    createdAt: row.created_at.toISOString(),
+    changeReason: row.change_reason,
+    changes: describeChanges(i > 0 ? rowToSnapshot(rows[i - 1]!) : null, rowToSnapshot(row)),
+  }));
+}
+
+/** Historial de un evento, la versión más reciente primero. Funciona también con eventos borrados. */
+export async function listVersions(
+  db: Db,
+  userId: string,
+  eventId: string,
+): Promise<EventVersionDto[]> {
+  const rows = await listVersionRows(db, userId, eventId);
+  if (rows.length === 0) throw new NotFoundError('Evento');
+  return toVersionDtos(eventId, rows).reverse();
+}
+
+export async function getVersion(
+  db: Db,
+  userId: string,
+  eventId: string,
+  version: number,
+): Promise<EventVersionDto> {
+  const versions = await listVersions(db, userId, eventId);
+  const found = versions.find((v) => v.version === version);
+  if (!found) throw new NotFoundError('Versión');
+  return found;
+}
+
+/**
+ * Restaurar = crear una versión nueva con el contenido de una antigua; el historial no se
+ * reescribe. También recupera un evento borrado. Si el evento ya está vivo y su contenido
+ * coincide con el de la versión pedida, no hay modificación y no se crea versión.
+ */
+export async function restoreVersion(
+  db: Db,
+  userId: string,
+  id: string,
+  version: number,
+  expectedVersion?: number,
+): Promise<EventDto> {
+  return withTransaction(db, async (tx) => {
+    const row = await findCurrent(tx, userId, id, { lock: true });
+    if (!row) throw new NotFoundError('Evento');
+    if (expectedVersion !== undefined && expectedVersion !== row.version) {
+      throw new ConflictError(
+        'version_conflict',
+        `El evento está en la versión ${row.version}, no en la ${expectedVersion}`,
+      );
+    }
+
+    const target = await findVersionRow(tx, userId, id, version);
+    if (!target) throw new NotFoundError('Versión');
+
+    const fields = rowToFields(target);
+    if (!row.deleted && !hasChanges(rowToFields(row), fields)) return rowToDto(row);
+
+    const restored = await appendVersion(
+      tx,
+      row,
+      { fields, deleted: false, changeReason: `restored from version ${version}` },
+      userId,
+    );
+    return rowToDto(restored);
   });
 }

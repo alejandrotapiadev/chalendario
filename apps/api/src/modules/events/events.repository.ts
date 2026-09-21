@@ -1,14 +1,9 @@
-import type { EventFields, EventStatus } from '@calendar/domain';
+import type { EventFields, EventSnapshot, EventStatus } from '@calendar/domain';
 import type { EventDto } from '@calendar/shared';
 import type { Queryable } from '../../db.ts';
 
-export interface EventRow {
-  id: string;
-  calendar_id: string;
-  series_id: string | null;
-  version: number;
-  created_at: Date;
-  updated_at: Date;
+/** Columnas de contenido que tienen en común las versiones y el estado actual. */
+interface ContentRow {
   title: string;
   description: string;
   start_at: Date;
@@ -19,6 +14,21 @@ export interface EventRow {
   status: EventStatus;
   color: string | null;
   deleted: boolean;
+}
+
+export interface EventRow extends ContentRow {
+  id: string;
+  calendar_id: string;
+  series_id: string | null;
+  version: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface VersionRow extends ContentRow {
+  version: number;
+  created_at: Date;
+  change_reason: string | null;
 }
 
 // Estado actual = fila de `events` + su versión vigente. El join con `calendars` acota
@@ -32,7 +42,7 @@ const CURRENT_EVENTS = `
     JOIN event_versions v ON v.event_id = e.id AND v.version = e.current_version
     JOIN calendars c ON c.id = e.calendar_id`;
 
-export function rowToFields(row: EventRow): EventFields {
+export function rowToFields(row: ContentRow): EventFields {
   return {
     title: row.title,
     description: row.description,
@@ -153,4 +163,50 @@ export async function setCurrentVersion(
     eventId,
     version,
   ]);
+}
+
+export function rowToSnapshot(row: ContentRow): EventSnapshot {
+  return { ...rowToFields(row), deleted: row.deleted };
+}
+
+const VERSION_COLUMNS = `
+  v.version, v.title, v.description, v.start_at, v.end_at, v.timezone, v.all_day,
+  v.location, v.status, v.color, v.deleted, v.created_at, v.change_reason`;
+
+/**
+ * Historial completo de un evento del usuario, de la versión más antigua a la más reciente.
+ * Incluye los eventos borrados. Vacío si el evento no existe o no es del usuario.
+ */
+export async function listVersionRows(
+  db: Queryable,
+  userId: string,
+  eventId: string,
+): Promise<VersionRow[]> {
+  const { rows } = await db.query<VersionRow>(
+    `SELECT ${VERSION_COLUMNS}
+       FROM event_versions v
+       JOIN events e ON e.id = v.event_id
+       JOIN calendars c ON c.id = e.calendar_id
+      WHERE v.event_id = $1 AND c.user_id = $2
+      ORDER BY v.version`,
+    [eventId, userId],
+  );
+  return rows;
+}
+
+export async function findVersionRow(
+  db: Queryable,
+  userId: string,
+  eventId: string,
+  version: number,
+): Promise<VersionRow | null> {
+  const { rows } = await db.query<VersionRow>(
+    `SELECT ${VERSION_COLUMNS}
+       FROM event_versions v
+       JOIN events e ON e.id = v.event_id
+       JOIN calendars c ON c.id = e.calendar_id
+      WHERE v.event_id = $1 AND c.user_id = $2 AND v.version = $3`,
+    [eventId, userId, version],
+  );
+  return rows[0] ?? null;
 }

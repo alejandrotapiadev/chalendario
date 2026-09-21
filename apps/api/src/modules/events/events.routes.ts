@@ -1,8 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { createEventSchema, listEventsQuerySchema, updateEventSchema } from '@calendar/shared';
+import {
+  createEventSchema,
+  listEventsQuerySchema,
+  restoreEventSchema,
+  updateEventSchema,
+  versionParamsSchema,
+} from '@calendar/shared';
 import type { Db } from '../../db.ts';
-import { createEvent, deleteEvent, getEvent, listEvents, updateEvent } from './events.service.ts';
+import {
+  createEvent,
+  deleteEvent,
+  getEvent,
+  getVersion,
+  listEvents,
+  listVersions,
+  restoreVersion,
+  updateEvent,
+} from './events.service.ts';
 
 const params = z.object({ id: z.uuid() });
 
@@ -33,5 +48,21 @@ export function registerEventRoutes(app: FastifyInstance, db: Db): void {
     const { id } = params.parse(request.params);
     await deleteEvent(db, request.userId, id);
     return reply.code(204).send();
+  });
+
+  app.get('/events/:id/versions', async (request) => {
+    const { id } = params.parse(request.params);
+    return listVersions(db, request.userId, id);
+  });
+
+  app.get('/events/:id/versions/:version', async (request) => {
+    const { id, version } = versionParamsSchema.parse(request.params);
+    return getVersion(db, request.userId, id, version);
+  });
+
+  app.post('/events/:id/restore/:version', async (request) => {
+    const { id, version } = versionParamsSchema.parse(request.params);
+    const { expectedVersion } = restoreEventSchema.parse(request.body ?? {});
+    return restoreVersion(db, request.userId, id, version, expectedVersion);
   });
 }

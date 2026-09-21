@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EVENT_STATUSES, type EventStatus } from '@calendar/domain';
+import { EVENT_STATUSES, type EventStatus, type FieldChange } from '@calendar/domain';
 
 // Aquí solo se valida la forma de los datos. Las reglas de negocio (título no vacío,
 // fin posterior al inicio, medianoche local en eventos de todo el día…) viven en
@@ -90,4 +90,40 @@ export interface EventDto {
   color: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Parámetros de ruta de las versiones: `/events/:id/versions/:version`. */
+export const versionParamsSchema = z.object({
+  id: z.uuid(),
+  version: z.coerce.number().int().positive(),
+});
+
+export const restoreEventSchema = z.strictObject({
+  /** Concurrencia optimista, igual que en `updateEventSchema`. */
+  expectedVersion: z.int().positive().optional(),
+});
+export type RestoreEventInput = z.infer<typeof restoreEventSchema>;
+
+/** Una versión del historial de un evento. */
+export interface EventVersionDto {
+  eventId: string;
+  version: number;
+  /** Es la versión vigente del evento. */
+  isCurrent: boolean;
+  title: string;
+  description: string;
+  startAt: string;
+  endAt: string;
+  timezone: string;
+  allDay: boolean;
+  location: string;
+  status: EventStatus;
+  color: string | null;
+  /** Esta versión marca el evento como borrado. */
+  deleted: boolean;
+  createdAt: string;
+  /** Motivo del cambio: `deleted`, `restored from version N`, o el que indicó el usuario. */
+  changeReason: string | null;
+  /** Qué cambió respecto a la versión anterior (vacío en la versión 1). */
+  changes: FieldChange[];
 }

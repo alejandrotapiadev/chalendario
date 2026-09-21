@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CalendarDto, EventDto, UserDto } from '@calendar/shared';
 import { ApiError, api } from './api.ts';
 import {
+  browserTimezone,
   shiftCursor,
   startOfDay,
   visibleRange,
@@ -143,6 +144,34 @@ export function App({ user, onLogout }: AppProps) {
     [calendarColors],
   );
 
+  /**
+   * Arrastrar o redimensionar un evento. Se actualiza la pantalla al instante y, si el
+   * servidor lo rechaza (p. ej. conflicto de versión), se recarga el estado real.
+   */
+  const moveEvent = async (event: EventDto, start: Date, end: Date) => {
+    const startAt = start.toISOString();
+    const endAt = end.toISOString();
+    setEvents((list) => list.map((e) => (e.id === event.id ? { ...e, startAt, endAt } : e)));
+    try {
+      const updated = await api.updateEvent(event.id, {
+        startAt,
+        endAt,
+        // Los de todo el día se alinean a medianoche en la zona del navegador.
+        ...(event.allDay && { timezone: browserTimezone() }),
+        expectedVersion: event.version,
+      });
+      handleChanged({ kind: 'updated', event: updated, previousVersion: event.version });
+    } catch (err) {
+      setReloadKey((k) => k + 1);
+      showToast({
+        message:
+          err instanceof ApiError
+            ? `No se pudo mover: ${err.userMessage.split('\n')[0]}`
+            : 'No se pudo mover el evento',
+      });
+    }
+  };
+
   const toggleCalendar = (id: string) => {
     const next = new Set(hiddenCalendars);
     if (!next.delete(id)) next.add(id);
@@ -223,6 +252,7 @@ export function App({ user, onLogout }: AppProps) {
               onSelectDay={goToDay}
               onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
               onCreateOn={(day) => openCreate(day, true)}
+              onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
             />
           )}
           {view !== 'month' && (
@@ -235,6 +265,7 @@ export function App({ user, onLogout }: AppProps) {
               onSelectDay={goToDay}
               onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
               onCreateAt={(start) => openCreate(start)}
+              onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
             />
           )}
         </main>

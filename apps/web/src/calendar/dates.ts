@@ -131,3 +131,8 @@ export function fromInputs(date: string, time = '00:00'): Date {
 export function browserTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
+
+/** Días de calendario de `a` a `b` (con signo). Robusto ante los cambios de hora. */
+export function daysBetween(a: Date, b: Date): number {
+  return Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86_400_000);
+}

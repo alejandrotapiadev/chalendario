@@ -258,6 +258,17 @@ textarea {
 .month-cell.is-today {
   background: var(--today-bg);
 }
+.month-grid.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+.month-cell.is-drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.chip.is-dragging {
+  opacity: 0.4;
+}
 .month-daynum {
   align-self: flex-end;
   min-width: 26px;
@@ -389,6 +400,19 @@ textarea {
   line-height: 1.3;
   overflow: hidden;
   cursor: pointer;
+}
+.tg-event.is-dragging {
+  z-index: 4;
+  opacity: 0.85;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.35);
+  cursor: grabbing;
+  user-select: none;
+}
+.tg-resize {
+  position: absolute;
+  inset: auto 0 0;
+  height: 8px;
+  cursor: ns-resize;
 }
 .tg-event:hover {
   background: color-mix(in srgb, var(--event-color) 35%, var(--bg));

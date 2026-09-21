@@ -86,8 +86,20 @@ export function normalizeRecurrence(
   return out;
 }
 
+/**
+ * Clave para comparar reglas por contenido. No depende del orden de las claves: PostgreSQL
+ * devuelve los `jsonb` con las claves reordenadas (por longitud), así que comparar con
+ * `JSON.stringify` daría «distinto» para dos reglas iguales.
+ */
 export function recurrenceKey(rule: RecurrenceRule | null): string {
-  return rule === null ? '' : JSON.stringify(rule);
+  if (rule === null) return '';
+  return JSON.stringify([
+    rule.freq,
+    rule.interval,
+    rule.byWeekday ?? null,
+    rule.until ?? null,
+    rule.count ?? null,
+  ]);
 }
 
 /** Lista de invariantes incumplidas por la regla (vacía si es válida). */

@@ -1,5 +1,5 @@
 import type { EventFields } from './event.ts';
-import type { RecurrenceRule } from './recurrence.ts';
+import { recurrenceKey, type RecurrenceRule } from './recurrence.ts';
 
 /** Contenido de una versión: los campos del evento más su marca de borrado (ADR-005). */
 export interface EventSnapshot extends EventFields {
@@ -35,10 +35,10 @@ function comparable(snapshot: EventSnapshot, field: TrackedField): FieldValue {
   return value instanceof Date ? value.toISOString() : value;
 }
 
-// Las reglas de recurrencia son objetos: se comparan por contenido (están normalizadas).
+// Las reglas de recurrencia son objetos: se comparan por contenido, no por el orden de sus claves.
 const sameValue = (a: FieldValue, b: FieldValue) =>
-  typeof a === 'object' || typeof b === 'object'
-    ? JSON.stringify(a) === JSON.stringify(b)
+  typeof a === 'object' && a !== null && typeof b === 'object' && b !== null
+    ? recurrenceKey(a) === recurrenceKey(b)
     : a === b;
 
 /**

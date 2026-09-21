@@ -413,6 +413,28 @@ describe('recurrencia en el evento', () => {
     expect(newEventFields(base)).toMatchObject({ recurrence: null, categoryId: null });
   });
 
+  it('dos reglas iguales con las claves en distinto orden (como las devuelve jsonb) no son un cambio', () => {
+    const a = {
+      ...newEventFields({
+        ...base,
+        recurrence: { freq: 'weekly', interval: 2, byWeekday: [0], count: 4 },
+      }),
+      deleted: false,
+    };
+    // Orden de claves de PostgreSQL: por longitud (freq, count, interval, byWeekday).
+    const reordered = {
+      ...a,
+      recurrence: JSON.parse('{"freq":"weekly","count":4,"interval":2,"byWeekday":[0]}'),
+    };
+    expect(hasChanges(a, reordered)).toBe(false);
+    expect(describeChanges(a, reordered)).toEqual([]);
+    // Y un cambio real sigue detectándose.
+    expect(hasChanges(a, { ...a, recurrence: { ...a.recurrence!, count: 5 } })).toBe(true);
+    expect(describeChanges(a, { ...a, recurrence: { ...a.recurrence!, count: 5 } })).toHaveLength(
+      1,
+    );
+  });
+
   it('hasChanges y describeChanges detectan cambios de regla y de categoría', () => {
     const a = {
       ...newEventFields({ ...base, recurrence: { freq: 'daily', interval: 1 } }),

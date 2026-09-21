@@ -253,7 +253,11 @@ export function EventDialog({
           previousVersion: editing.version,
         }),
         async (err) => {
-          if (!(err instanceof ApiError && err.body?.error === 'version_conflict')) return false;
+          // 409: otra persona lo modificó. 404: lo eliminó (el servidor ya no lo considera vivo).
+          const stale =
+            err instanceof ApiError &&
+            (err.body?.error === 'version_conflict' || err.status === 404);
+          if (!stale) return false;
           try {
             setConflict({ latest: await api.getEvent(editing.id), mine: input });
           } catch (fetchErr) {

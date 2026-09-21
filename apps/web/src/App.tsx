@@ -7,7 +7,7 @@ import type {
   ReminderDto,
   UserDto,
 } from '@calendar/shared';
-import { ApiError, api } from './api.ts';
+import { ApiError, api, setConnectionHandler, type ConnectionState } from './api.ts';
 import {
   browserTimezone,
   shiftCursor,
@@ -99,6 +99,7 @@ export function App({ user, onLogout }: AppProps) {
   );
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [subscribing, setSubscribing] = useState(false);
+  const [connection, setConnection] = useState<ConnectionState>('live');
   const [invitations, setInvitations] = useState<InvitationDto[]>([]);
 
   const range = visibleRange(view, cursor);
@@ -140,6 +141,20 @@ export function App({ user, onLogout }: AppProps) {
   }, [toast]);
 
   const showToast = (next: Omit<Toast, 'id'>) => setToast({ id: Date.now(), ...next });
+
+  // Avisa cuando lo que se ve viene de lo guardado (sin conexión) y recarga al volver la red.
+  useEffect(() => {
+    setConnectionHandler(setConnection);
+    const goOffline = () => setConnection('offline');
+    const goOnline = () => setReloadKey((k) => k + 1);
+    window.addEventListener('offline', goOffline);
+    window.addEventListener('online', goOnline);
+    return () => {
+      setConnectionHandler(null);
+      window.removeEventListener('offline', goOffline);
+      window.removeEventListener('online', goOnline);
+    };
+  }, []);
 
   const reloadCalendars = useCallback(
     () =>
@@ -409,6 +424,12 @@ export function App({ user, onLogout }: AppProps) {
           />
         }
       />
+      {connection !== 'live' && (
+        <div role="status" className="banner-offline">
+          Sin conexión: se muestran los datos guardados en este dispositivo. Los cambios no se
+          pueden guardar hasta que vuelva la conexión.
+        </div>
+      )}
       {error && (
         <div role="alert" className="banner-error">
           {error}

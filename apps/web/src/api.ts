@@ -32,7 +32,13 @@ export class ApiError extends Error {
   readonly body: ApiErrorBody | null;
 
   constructor(status: number, body: ApiErrorBody | null) {
-    super(body?.message ?? `Error ${status}`);
+    // Un 5xx sin cuerpo de la API es el proxy avisando de que el servidor no responde.
+    super(
+      body?.message ??
+        (status >= 500
+          ? 'El servidor no responde. Inténtalo de nuevo en unos momentos.'
+          : `Error ${status}`),
+    );
     this.name = 'ApiError';
     this.status = status;
     this.body = body;
@@ -42,6 +48,26 @@ export class ApiError extends Error {
   get userMessage(): string {
     return this.body?.issues?.length ? this.body.issues.join('\n') : this.message;
   }
+}
+
+/** Estado de la conexión según la última lectura: en vivo, desde lo guardado o sin red. */
+export type ConnectionState = 'live' | 'cached' | 'offline';
+
+let onConnection: ((state: ConnectionState) => void) | null = null;
+
+export function setConnectionHandler(handler: ((state: ConnectionState) => void) | null): void {
+  onConnection = handler;
+}
+
+/**
+ * Vacía los datos que el service worker guardó para leer sin conexión. Hay que hacerlo al
+ * cerrar sesión, al caducar y al entrar: esa caché es del navegador, no de la cuenta.
+ */
+export function clearOfflineCache(): void {
+  if (!('serviceWorker' in navigator)) return;
+  void navigator.serviceWorker.ready
+    .then((registration) => registration.active?.postMessage('clear-api-cache'))
+    .catch(() => undefined);
 }
 
 let onUnauthorized: (() => void) | null = null;
@@ -54,11 +80,19 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 const AUTH_FORM_PATHS = ['/auth/login', '/auth/register'];
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      method,
+      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    onConnection?.('offline');
+    throw err;
+  }
+  if (method === 'GET' && res.ok)
+    onConnection?.(res.headers.has('x-from-cache') ? 'cached' : 'live');
   if (res.status === 401 && !AUTH_FORM_PATHS.includes(path)) onUnauthorized?.();
   if (!res.ok) {
     const errorBody = (await res.json().catch(() => null)) as ApiErrorBody | null;

@@ -12,4 +12,19 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
+  {
+    // El service worker se ejecuta en su propio ámbito, con estos globales del navegador.
+    files: ['apps/web/public/sw.js'],
+    languageOptions: {
+      globals: {
+        self: 'readonly',
+        caches: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+        Headers: 'readonly',
+        Response: 'readonly',
+        AbortSignal: 'readonly',
+      },
+    },
+  },
 );

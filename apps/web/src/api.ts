@@ -1,7 +1,9 @@
 import type {
   ApiErrorBody,
   CalendarDto,
+  CategoryDto,
   CreateCalendarInput,
+  CreateCategoryInput,
   UpdateCalendarInput,
   CreateEventInput,
   EventDto,
@@ -9,7 +11,9 @@ import type {
   LoginInput,
   RegisterInput,
   UserDto,
+  ReminderDto,
   RestoreEventInput,
+  UpdateCategoryInput,
   UpdateEventInput,
 } from '@calendar/shared';
 
@@ -67,6 +71,15 @@ export const api = {
       'GET',
       `/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
     ),
+  listCategories: () => request<CategoryDto[]>('GET', '/categories'),
+  createCategory: (input: CreateCategoryInput) =>
+    request<CategoryDto>('POST', '/categories', input),
+  updateCategory: (id: string, input: UpdateCategoryInput) =>
+    request<CategoryDto>('PATCH', `/categories/${id}`, input),
+  getEvent: (id: string) => request<EventDto>('GET', `/events/${id}`),
+  searchEvents: (q: string) =>
+    request<EventDto[]>('GET', `/events/search?q=${encodeURIComponent(q)}`),
+  activeReminders: () => request<ReminderDto[]>('GET', '/reminders/active'),
   createEvent: (input: CreateEventInput) => request<EventDto>('POST', '/events', input),
   updateEvent: (id: string, input: UpdateEventInput) =>
     request<EventDto>('PATCH', `/events/${id}`, input),

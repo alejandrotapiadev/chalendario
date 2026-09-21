@@ -136,3 +136,8 @@ export function browserTimezone(): string {
 export function daysBetween(a: Date, b: Date): number {
   return Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / 86_400_000);
 }
+
+/** Día de la semana con lunes = 0 … domingo = 6 (como en las reglas de repetición). */
+export function weekdayIndex(date: Date): number {
+  return (date.getDay() + 6) % 7;
+}

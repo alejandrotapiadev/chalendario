@@ -732,6 +732,240 @@ textarea {
   cursor: pointer;
 }
 
+/* ---------- Repetición, recordatorios, categorías ---------- */
+
+.dialog {
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.notice {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-size: 0.9rem;
+}
+.repeat {
+  gap: 8px;
+}
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.inline input[type='number'] {
+  width: 64px;
+}
+.weekdays {
+  display: flex;
+  gap: 4px;
+}
+.weekday {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  cursor: pointer;
+}
+.weekday[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.weekday:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+.repeat-end {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 0.85rem;
+}
+.tag button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tag button:hover {
+  background: var(--border);
+}
+.repeat-icon {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.chip-solid .repeat-icon {
+  color: inherit;
+  opacity: 0.85;
+}
+.side-section + .side-section {
+  margin-top: 20px;
+}
+
+/* ---------- Búsqueda y avisos ---------- */
+
+.search {
+  position: relative;
+  flex: 1 1 200px;
+  max-width: 360px;
+}
+.search-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.search-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 6;
+  width: min(420px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+}
+.search-empty {
+  margin: 0;
+  padding: 12px;
+}
+.search-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.search-item:hover,
+.search-item:focus-visible {
+  background: var(--surface-2);
+}
+.search-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 50%;
+}
+.search-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.search-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-meta {
+  font-size: 0.8rem;
+}
+.bell {
+  position: relative;
+}
+.bell-btn {
+  position: relative;
+}
+.bell-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 18px;
+  text-align: center;
+}
+.bell-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 6;
+  width: min(360px, calc(100vw - 32px));
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.3);
+}
+.bell-empty {
+  margin: 4px;
+}
+.bell-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50vh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.bell-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.bell-event {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.bell-event:hover {
+  background: var(--surface-2);
+}
+.bell-all {
+  margin: 6px 8px 2px;
+}
+.icon-btn.is-visible {
+  opacity: 1;
+}
+
 /* ---------- Móvil ---------- */
 
 @media (max-width: 800px) {

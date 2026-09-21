@@ -16,6 +16,9 @@ const event = (over: Partial<EventDto> & { start: Date; end: Date }): EventDto =
   location: '',
   status: 'confirmed',
   color: null,
+  recurrence: null,
+  categoryId: null,
+  reminders: [],
   createdAt: '',
   updatedAt: '',
 });

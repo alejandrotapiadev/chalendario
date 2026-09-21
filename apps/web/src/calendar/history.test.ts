@@ -32,6 +32,26 @@ describe('describeChange', () => {
     );
   });
 
+  it('describe la repetición con la regla en español, y «no se repite» al quitarla', () => {
+    const weekly = { freq: 'weekly' as const, interval: 1, byWeekday: [0, 2] };
+    expect(describeChange({ field: 'recurrence', from: null, to: weekly })).toBe(
+      'Repetición: no se repite → Cada semana (lun, mié)',
+    );
+    expect(describeChange({ field: 'recurrence', from: weekly, to: null })).toBe(
+      'Repetición: Cada semana (lun, mié) → no se repite',
+    );
+  });
+
+  it('describe la categoría por su nombre y «ninguna» cuando falta', () => {
+    const ctx = { categoryName: (id: string) => (id === 'c1' ? 'Salud' : undefined) };
+    expect(describeChange({ field: 'categoryId', from: null, to: 'c1' }, ctx)).toBe(
+      'Categoría: ninguna → «Salud»',
+    );
+    expect(describeChange({ field: 'categoryId', from: 'c1', to: 'c9' }, ctx)).toBe(
+      'Categoría: «Salud» → «categoría desconocida»',
+    );
+  });
+
   it('el borrado y la recuperación tienen frase propia', () => {
     expect(describeChange({ field: 'deleted', from: false, to: true })).toBe('Evento eliminado');
     expect(describeChange({ field: 'deleted', from: true, to: false })).toBe('Evento restaurado');

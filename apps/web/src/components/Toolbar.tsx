@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { UserDto } from '@calendar/shared';
 import { viewTitle, type ViewMode } from '../calendar/dates.ts';
 
@@ -18,6 +19,9 @@ interface Props {
   user: UserDto;
   onLogout: () => void;
   onToggleSidebar: () => void;
+  /** Búsqueda y recordatorios: se pasan ya construidos para que la barra no dependa de ellos. */
+  search: ReactNode;
+  reminders: ReactNode;
 }
 
 export function Toolbar({
@@ -31,6 +35,8 @@ export function Toolbar({
   user,
   onLogout,
   onToggleSidebar,
+  search,
+  reminders,
 }: Props) {
   return (
     <header className="toolbar">
@@ -45,6 +51,7 @@ export function Toolbar({
         </button>
         <h1 className="toolbar-title">{viewTitle(view, cursor)}</h1>
       </div>
+      {search}
       <div className="toolbar-controls">
         <button type="button" className="btn" onClick={onToday}>
           Hoy
@@ -70,6 +77,7 @@ export function Toolbar({
             </button>
           ))}
         </div>
+        {reminders}
         <button type="button" className="btn btn-primary" onClick={onCreate}>
           + Evento
         </button>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { CalendarDto, EventDto, UserDto } from '@calendar/shared';
+import type { CalendarDto, CategoryDto, EventDto, ReminderDto, UserDto } from '@calendar/shared';
 import { ApiError, api } from './api.ts';
 import {
   browserTimezone,
@@ -12,9 +12,13 @@ import {
 import { EventDialog, type ChangeInfo, type DialogTarget } from './components/EventDialog.tsx';
 import { MonthView } from './components/MonthView.tsx';
 import { TimeGridView } from './components/TimeGridView.tsx';
+import { RemindersMenu } from './components/RemindersMenu.tsx';
+import { SearchBox } from './components/SearchBox.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
 import { loadStringSet, saveStringSet } from './storage.ts';
+import { useReminders } from './useReminders.ts';
+import { whenLabel } from './calendar/reminders.ts';
 
 const FALLBACK_COLOR = '#3b82f6';
 const TOAST_MS = 8000;
@@ -79,6 +83,11 @@ export function App({ user, onLogout }: AppProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const hiddenKey = `hiddenCalendars:${user.id}`;
   const [hiddenCalendars, setHiddenCalendars] = useState(() => loadStringSet(hiddenKey));
+  const [categories, setCategories] = useState<CategoryDto[]>([]);
+  const hiddenCategoriesKey = `hiddenCategories:${user.id}`;
+  const [hiddenCategories, setHiddenCategories] = useState(() =>
+    loadStringSet(hiddenCategoriesKey),
+  );
 
   const range = visibleRange(view, cursor);
   const from = range.from.getTime();
@@ -89,6 +98,10 @@ export function App({ user, onLogout }: AppProps) {
       .listCalendars()
       .then(setCalendars)
       .catch(() => setError('No se pudo conectar con el servidor'));
+    api
+      .listCategories()
+      .then(setCategories)
+      .catch(() => undefined); // los avisos de conexión ya salen al cargar los calendarios
   }, []);
 
   useEffect(() => {
@@ -138,10 +151,35 @@ export function App({ user, onLogout }: AppProps) {
     }
   };
 
+  const notifyFresh = (news: ReminderDto[]) => {
+    const now = new Date();
+    const first = news[0]!;
+    const more = news.length > 1 ? ` (+${news.length - 1} más)` : '';
+    showToast({ message: `🔔 ${first.title}: ${whenLabel(first.occurrenceStartAt, now)}${more}` });
+    // Aviso del sistema si el usuario lo ha permitido; en cualquier caso hay aviso en la app.
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      for (const r of news) {
+        new Notification(r.title, {
+          body: [whenLabel(r.occurrenceStartAt, now), r.location].filter(Boolean).join(' · '),
+          tag: `${r.eventId}|${r.occurrenceStartAt}|${r.minutesBefore}`,
+        });
+      }
+    }
+  };
+  const reminders = useReminders({ userId: user.id, refreshKey: reloadKey, onFresh: notifyFresh });
+
   const calendarColors = useMemo(() => new Map(calendars.map((c) => [c.id, c.color])), [calendars]);
+  const categoryColors = useMemo(
+    () => new Map(categories.map((c) => [c.id, c.color])),
+    [categories],
+  );
   const colorOf = useCallback(
-    (event: EventDto) => event.color ?? calendarColors.get(event.calendarId) ?? FALLBACK_COLOR,
-    [calendarColors],
+    (event: EventDto) =>
+      event.color ??
+      (event.categoryId ? categoryColors.get(event.categoryId) : undefined) ??
+      calendarColors.get(event.calendarId) ??
+      FALLBACK_COLOR,
+    [calendarColors, categoryColors],
   );
 
   /**
@@ -189,15 +227,60 @@ export function App({ user, onLogout }: AppProps) {
     setCalendars((list) => list.map((c) => (c.id === id ? updated : c)));
   };
 
+  const toggleCategory = (id: string) => {
+    const next = new Set(hiddenCategories);
+    if (!next.delete(id)) next.add(id);
+    setHiddenCategories(next);
+    saveStringSet(hiddenCategoriesKey, next);
+  };
+
+  const createCategory = async (input: { name: string; color: string }) => {
+    const created = await api.createCategory(input);
+    setCategories((list) => [...list, created].sort((a, b) => a.name.localeCompare(b.name)));
+  };
+
+  const updateCategory = async (id: string, input: { name: string; color: string }) => {
+    const updated = await api.updateCategory(id, input);
+    setCategories((list) =>
+      list.map((c) => (c.id === id ? updated : c)).sort((a, b) => a.name.localeCompare(b.name)),
+    );
+  };
+
+  // Los eventos sin categoría siempre se ven: los filtros solo ocultan lo que se marca.
   const visibleEvents = useMemo(
-    () => events.filter((e) => !hiddenCalendars.has(e.calendarId)),
-    [events, hiddenCalendars],
+    () =>
+      events.filter(
+        (e) =>
+          !hiddenCalendars.has(e.calendarId) &&
+          !(e.categoryId && hiddenCategories.has(e.categoryId)),
+      ),
+    [events, hiddenCalendars, hiddenCategories],
   );
 
   /** Abre el diálogo y retira el aviso anterior, que quedaría oculto tras él. */
   const openDialog = (target: DialogTarget) => {
     setToast(null);
     setDialog(target);
+  };
+
+  /**
+   * Abre un evento para editarlo. Una ocurrencia de una serie trae las fechas de esa
+   * ocurrencia; el formulario necesita las de la serie, así que se pide el evento completo.
+   */
+  const openEvent = async (event: EventDto) => {
+    try {
+      openDialog({ kind: 'edit', event: event.recurrence ? await api.getEvent(event.id) : event });
+    } catch {
+      showToast({ message: 'No se pudo abrir el evento' });
+    }
+  };
+
+  const openEventById = async (eventId: string) => {
+    try {
+      openDialog({ kind: 'edit', event: await api.getEvent(eventId) });
+    } catch {
+      showToast({ message: 'No se pudo abrir el evento' });
+    }
   };
 
   const openCreate = (start: Date, allDay = false) => {
@@ -228,6 +311,24 @@ export function App({ user, onLogout }: AppProps) {
         user={user}
         onLogout={onLogout}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
+        search={
+          <SearchBox
+            colorOf={colorOf}
+            onOpen={(event) => {
+              setCursor(new Date(event.startAt));
+              openDialog({ kind: 'edit', event });
+            }}
+          />
+        }
+        reminders={
+          <RemindersMenu
+            reminders={reminders.reminders}
+            now={reminders.now}
+            onDismiss={reminders.dismiss}
+            onDismissAll={reminders.dismissAll}
+            onOpenEvent={(id) => void openEventById(id)}
+          />
+        }
       />
       {error && (
         <div role="alert" className="banner-error">
@@ -242,6 +343,11 @@ export function App({ user, onLogout }: AppProps) {
           onToggleCalendar={toggleCalendar}
           onCreateCalendar={createCalendar}
           onUpdateCalendar={updateCalendar}
+          categories={categories}
+          hiddenCategories={hiddenCategories}
+          onToggleCategory={toggleCategory}
+          onCreateCategory={createCategory}
+          onUpdateCategory={updateCategory}
         />
         <main className="view">
           {view === 'month' && (
@@ -250,7 +356,7 @@ export function App({ user, onLogout }: AppProps) {
               events={visibleEvents}
               colorOf={colorOf}
               onSelectDay={goToDay}
-              onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
+              onSelectEvent={(event) => void openEvent(event)}
               onCreateOn={(day) => openCreate(day, true)}
               onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
             />
@@ -263,7 +369,7 @@ export function App({ user, onLogout }: AppProps) {
               events={visibleEvents}
               colorOf={colorOf}
               onSelectDay={goToDay}
-              onSelectEvent={(event) => openDialog({ kind: 'edit', event })}
+              onSelectEvent={(event) => void openEvent(event)}
               onCreateAt={(start) => openCreate(start)}
               onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
             />
@@ -286,6 +392,7 @@ export function App({ user, onLogout }: AppProps) {
           key={dialog.kind === 'edit' ? `${dialog.event.id}-${dialog.event.version}` : 'new'}
           target={dialog}
           calendars={calendars}
+          categories={categories}
           onClose={() => setDialog(null)}
           onChanged={handleChanged}
         />

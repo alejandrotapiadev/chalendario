@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { EventVersionDto } from '@calendar/shared';
+import type { CategoryDto, EventVersionDto } from '@calendar/shared';
 import { ApiError, api } from '../api.ts';
 import { LOCALE } from '../calendar/dates.ts';
 import { describeChange, describeReason } from '../calendar/history.ts';
@@ -8,13 +8,14 @@ const stamp = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeStyle: 
 
 interface Props {
   eventId: string;
+  categories: CategoryDto[];
   busy: boolean;
   onRestore: (version: number) => void;
   onBack: () => void;
 }
 
 /** Historial de versiones de un evento, con la opción de restaurar cualquiera. */
-export function HistoryPanel({ eventId, busy, onRestore, onBack }: Props) {
+export function HistoryPanel({ eventId, categories, busy, onRestore, onBack }: Props) {
   const [versions, setVersions] = useState<EventVersionDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,6 +31,8 @@ export function HistoryPanel({ eventId, busy, onRestore, onBack }: Props) {
       stale = true;
     };
   }, [eventId]);
+
+  const context = { categoryName: (id: string) => categories.find((c) => c.id === id)?.name };
 
   return (
     <div className="form">
@@ -58,7 +61,7 @@ export function HistoryPanel({ eventId, busy, onRestore, onBack }: Props) {
                 ) : (
                   <ul className="history-changes">
                     {v.changes.map((change) => (
-                      <li key={change.field}>{describeChange(change)}</li>
+                      <li key={change.field}>{describeChange(change, context)}</li>
                     ))}
                   </ul>
                 )}

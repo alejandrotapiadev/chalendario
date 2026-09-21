@@ -11,6 +11,7 @@ import { LOCALE, isSameDay, startOfDay } from '../calendar/dates.ts';
 import { moveSpan, resizeSpan, sameSpan, snapMinutes, type Span } from '../calendar/drag.ts';
 import { eventsForDay, layoutSegments } from '../calendar/layout.ts';
 import { startDrag } from '../calendar/pointerDrag.ts';
+import { RepeatIcon } from './RepeatIcon.tsx';
 
 const HOUR_PX = 48;
 const MIN_EVENT_PX = 20;
@@ -89,7 +90,8 @@ export function TimeGridView({
     dayIndex: number,
     mode: DragState['mode'],
   ) => {
-    if (e.button !== 0) return;
+    // Mover una serie entera arrastrando una ocurrencia sería ambiguo: se edita en el diálogo.
+    if (e.button !== 0 || event.recurrence) return;
     e.preventDefault(); // evita seleccionar texto mientras se arrastra
     e.stopPropagation();
     const colWidth = e.currentTarget.closest<HTMLElement>('.tg-col')!.offsetWidth;
@@ -146,6 +148,7 @@ export function TimeGridView({
                   onClick={() => onSelectEvent(event)}
                 >
                   <span className="chip-title">{event.title}</span>
+                  {event.recurrence && <RepeatIcon />}
                 </button>
               ))}
             </div>
@@ -216,18 +219,23 @@ export function TimeGridView({
                     onSelectEvent(event);
                   }}
                 >
-                  <span className="tg-event-title">{event.title}</span>
+                  <span className="tg-event-title">
+                    {event.title}
+                    {event.recurrence && <RepeatIcon />}
+                  </span>
                   {baseHeight >= 34 && (
                     <span className="tg-event-time">
                       {timeFormat.format(first)} – {timeFormat.format(last)}
                     </span>
                   )}
-                  <span
-                    className="tg-resize"
-                    aria-hidden="true"
-                    onPointerDown={(e) => beginDrag(e, event, key, dayIndex, 'resize')}
-                    onClick={(e) => e.stopPropagation()}
-                  />
+                  {!event.recurrence && (
+                    <span
+                      className="tg-resize"
+                      aria-hidden="true"
+                      onPointerDown={(e) => beginDrag(e, event, key, dayIndex, 'resize')}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
                 </button>
               );
             })}

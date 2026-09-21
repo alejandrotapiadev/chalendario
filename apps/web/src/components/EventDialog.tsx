@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { CalendarDto, CreateEventInput, EventDto, UpdateEventInput } from '@calendar/shared';
+import type {
+  CalendarDto,
+  CategoryDto,
+  CreateEventInput,
+  EventDto,
+  UpdateEventInput,
+} from '@calendar/shared';
 import { ApiError, api } from '../api.ts';
 import {
   addDays,
@@ -8,9 +14,19 @@ import {
   startOfDay,
   toDateInput,
   toTimeInput,
+  weekdayIndex,
 } from '../calendar/dates.ts';
 import { STATUS_LABELS } from '../calendar/history.ts';
+import {
+  DEFAULT_REPEAT_FORM,
+  describeRule,
+  formFromRule,
+  ruleFromForm,
+  type RepeatForm,
+} from '../calendar/recurrence.ts';
 import { HistoryPanel } from './HistoryPanel.tsx';
+import { RecurrenceFields } from './RecurrenceFields.tsx';
+import { ReminderFields } from './ReminderFields.tsx';
 
 /** Valores iniciales para crear un evento. */
 export interface EventDraft {
@@ -20,7 +36,9 @@ export interface EventDraft {
 }
 
 export type DialogTarget =
-  { kind: 'create'; draft: EventDraft } | { kind: 'edit'; event: EventDto };
+  | { kind: 'create'; draft: EventDraft }
+  /** `event` debe ser el evento tal como está definido (con el inicio de su primera ocurrencia). */
+  | { kind: 'edit'; event: EventDto };
 
 /** Lo que ha pasado tras una operación con éxito; permite ofrecer «Deshacer». */
 export type ChangeInfo =
@@ -44,6 +62,7 @@ const PALETTE = [
 interface Props {
   target: DialogTarget;
   calendars: CalendarDto[];
+  categories: CategoryDto[];
   onClose: () => void;
   /** Se llama tras guardar, borrar o restaurar con éxito, para recargar los eventos. */
   onChanged: (change: ChangeInfo) => void;
@@ -52,6 +71,7 @@ interface Props {
 interface FormState {
   title: string;
   calendarId: string;
+  categoryId: string;
   allDay: boolean;
   startDate: string;
   startTime: string;
@@ -61,6 +81,8 @@ interface FormState {
   description: string;
   color: string | null;
   status: EventDto['status'];
+  repeat: RepeatForm;
+  reminders: number[];
 }
 
 function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState {
@@ -69,6 +91,7 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
     return {
       title: '',
       calendarId: calendars[0]?.id ?? '',
+      categoryId: '',
       allDay,
       startDate: toDateInput(start),
       startTime: toTimeInput(start),
@@ -78,6 +101,8 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
       description: '',
       color: null,
       status: 'confirmed',
+      repeat: { ...DEFAULT_REPEAT_FORM },
+      reminders: [],
     };
   }
   const { event } = target;
@@ -86,6 +111,7 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
   return {
     title: event.title,
     calendarId: event.calendarId,
+    categoryId: event.categoryId ?? '',
     allDay: event.allDay,
     startDate: toDateInput(start),
     startTime: toTimeInput(start),
@@ -96,6 +122,8 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
     description: event.description,
     color: event.color,
     status: event.status,
+    repeat: formFromRule(event.recurrence),
+    reminders: event.reminders,
   };
 }
 
@@ -112,13 +140,14 @@ function toInstants(form: FormState): { start: Date; end: Date } {
   };
 }
 
-export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
+export function EventDialog({ target, calendars, categories, onClose, onChanged }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [form, setForm] = useState(() => initialState(target, calendars));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const editing = target.kind === 'edit' ? target.event : null;
+  const isSeries = editing?.recurrence != null;
 
   useEffect(() => {
     dialog.current?.showModal();
@@ -156,6 +185,9 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
       location: form.location,
       status: form.status,
       color: form.color,
+      categoryId: form.categoryId || null,
+      recurrence: ruleFromForm(form.repeat, weekdayIndex(start)),
+      reminders: form.reminders,
     };
     if (editing) {
       const input: UpdateEventInput = { ...content, expectedVersion: editing.version };
@@ -170,11 +202,14 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
     }
   }
 
+  const startWeekday = weekdayIndex(fromInputs(form.startDate || toDateInput(new Date())));
+
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} onCancel={onClose}>
       {showHistory && editing ? (
         <HistoryPanel
           eventId={editing.id}
+          categories={categories}
           busy={busy}
           onBack={() => setShowHistory(false)}
           onRestore={(version) =>
@@ -190,6 +225,13 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
       ) : (
         <form onSubmit={submit} className="form">
           <h2>{editing ? 'Editar evento' : 'Nuevo evento'}</h2>
+
+          {isSeries && editing?.recurrence && (
+            <p className="notice" role="note">
+              Este evento se repite ({describeRule(editing.recurrence)}). Los cambios afectan a toda
+              la serie.
+            </p>
+          )}
 
           <label className="field">
             <span>Título</span>
@@ -256,6 +298,17 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
             )}
           </div>
 
+          <RecurrenceFields
+            value={form.repeat}
+            onChange={(repeat) => set('repeat', repeat)}
+            startWeekday={startWeekday}
+          />
+
+          <ReminderFields
+            value={form.reminders}
+            onChange={(reminders) => set('reminders', reminders)}
+          />
+
           <div className="field-row">
             {!editing && (
               <label className="field">
@@ -269,6 +322,17 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
                 </select>
               </label>
             )}
+            <label className="field">
+              <span>Categoría</span>
+              <select value={form.categoryId} onChange={(e) => set('categoryId', e.target.value)}>
+                <option value="">Sin categoría</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="field">
               <span>Estado</span>
               <select
@@ -307,7 +371,7 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
             <button
               type="button"
               className="swatch swatch-auto"
-              aria-label="Color del calendario"
+              aria-label="Color de la categoría o del calendario"
               aria-pressed={form.color === null}
               onClick={() => set('color', null)}
             >
@@ -339,7 +403,10 @@ export function EventDialog({ target, calendars, onClose, onChanged }: Props) {
                 className="btn btn-danger"
                 disabled={busy}
                 onClick={() => {
-                  if (window.confirm(`¿Eliminar «${editing.title}»?`)) {
+                  const what = isSeries
+                    ? `«${editing.title}» y todas sus repeticiones`
+                    : `«${editing.title}»`;
+                  if (window.confirm(`¿Eliminar ${what}?`)) {
                     void run(async () => {
                       await api.deleteEvent(editing.id);
                       return { kind: 'deleted', event: editing };

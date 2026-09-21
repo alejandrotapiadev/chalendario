@@ -11,6 +11,7 @@ import {
 import { moveSpan } from '../calendar/drag.ts';
 import { eventsForDay } from '../calendar/layout.ts';
 import { startDrag } from '../calendar/pointerDrag.ts';
+import { RepeatIcon } from './RepeatIcon.tsx';
 
 const MAX_VISIBLE = 3;
 const WEEKDAYS = Array.from({ length: 7 }, (_, i) =>
@@ -55,7 +56,8 @@ export function MonthView({
     key: string,
     from: Date,
   ) => {
-    if (e.button !== 0) return;
+    // Mover una serie entera arrastrando una ocurrencia sería ambiguo: se edita en el diálogo.
+    if (e.button !== 0 || event.recurrence) return;
     e.preventDefault();
     const reset = () => {
       setDragKey(null);
@@ -141,6 +143,7 @@ export function MonthView({
                   >
                     {time && <span className="chip-time">{time}</span>}
                     <span className="chip-title">{event.title}</span>
+                    {event.recurrence && <RepeatIcon />}
                   </button>
                 );
               })}

@@ -966,6 +966,132 @@ textarea {
   opacity: 1;
 }
 
+/* ---------- Ajustes de calendario, compartir, importar ---------- */
+
+.dialog-wide {
+  width: min(560px, calc(100vw - 32px));
+}
+fieldset.ro {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+fieldset.ro:disabled {
+  opacity: 0.75;
+}
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.settings-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.settings-section p {
+  margin: 0;
+}
+.summary {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 0.9rem;
+}
+.summary ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.member-who {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.member select,
+.invite-row select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.invite-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.feed-url {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.feed-url input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+.feed-url p {
+  flex-basis: 100%;
+  word-break: break-all;
+}
+.side-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+.side-owner {
+  margin: -4px 0 4px 26px;
+  font-size: 0.75rem;
+}
+.side-link {
+  display: block;
+  margin-top: 4px;
+}
+.invitation p {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+}
+.invitations {
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--today-bg);
+}
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+  color: inherit;
+}
+
 /* ---------- Móvil ---------- */
 
 @media (max-width: 800px) {

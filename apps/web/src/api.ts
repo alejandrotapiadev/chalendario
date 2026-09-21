@@ -8,11 +8,21 @@ import type {
   CreateEventInput,
   EventDto,
   EventVersionDto,
+  FeedCreatedDto,
+  FeedStatusDto,
+  ImportIcsInput,
+  ImportResultDto,
+  InvitationDto,
+  InviteInput,
+  MemberDto,
+  MemberRole,
   LoginInput,
   RegisterInput,
   UserDto,
   ReminderDto,
   RestoreEventInput,
+  SubscribeInput,
+  SubscribeResultDto,
   UpdateCategoryInput,
   UpdateEventInput,
 } from '@calendar/shared';
@@ -71,6 +81,31 @@ export const api = {
       'GET',
       `/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
     ),
+  exportUrl: (calendarId: string) => `/api/calendars/${calendarId}/export.ics`,
+  importIcs: (calendarId: string, input: ImportIcsInput) =>
+    request<ImportResultDto>('POST', `/calendars/${calendarId}/import`, input),
+  feedStatus: (calendarId: string) =>
+    request<FeedStatusDto>('GET', `/calendars/${calendarId}/feed`),
+  createFeed: (calendarId: string) =>
+    request<FeedCreatedDto>('POST', `/calendars/${calendarId}/feed`),
+  deleteFeed: (calendarId: string) => request<void>('DELETE', `/calendars/${calendarId}/feed`),
+  subscribe: (input: SubscribeInput) =>
+    request<SubscribeResultDto>('POST', '/subscriptions', input),
+  syncCalendar: (calendarId: string) =>
+    request<ImportResultDto>('POST', `/calendars/${calendarId}/sync`),
+  unsubscribe: (calendarId: string) =>
+    request<void>('DELETE', `/calendars/${calendarId}/subscription`),
+  listMembers: (calendarId: string) =>
+    request<MemberDto[]>('GET', `/calendars/${calendarId}/members`),
+  invite: (calendarId: string, input: InviteInput) =>
+    request<MemberDto>('POST', `/calendars/${calendarId}/members`, input),
+  updateMember: (calendarId: string, userId: string, role: MemberRole) =>
+    request<MemberDto>('PATCH', `/calendars/${calendarId}/members/${userId}`, { role }),
+  removeMember: (calendarId: string, userId: string) =>
+    request<void>('DELETE', `/calendars/${calendarId}/members/${userId}`),
+  listInvitations: () => request<InvitationDto[]>('GET', '/invitations'),
+  respondInvitation: (calendarId: string, action: 'accept' | 'decline') =>
+    request<void>('POST', `/invitations/${calendarId}/${action}`),
   listCategories: () => request<CategoryDto[]>('GET', '/categories'),
   createCategory: (input: CreateCategoryInput) =>
     request<CategoryDto>('POST', '/categories', input),

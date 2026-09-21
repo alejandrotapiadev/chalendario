@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { CalendarDto, CategoryDto, EventDto, ReminderDto, UserDto } from '@calendar/shared';
+import type {
+  CalendarDto,
+  CategoryDto,
+  EventDto,
+  InvitationDto,
+  ReminderDto,
+  UserDto,
+} from '@calendar/shared';
 import { ApiError, api } from './api.ts';
 import {
   browserTimezone,
@@ -14,7 +21,9 @@ import { MonthView } from './components/MonthView.tsx';
 import { TimeGridView } from './components/TimeGridView.tsx';
 import { RemindersMenu } from './components/RemindersMenu.tsx';
 import { SearchBox } from './components/SearchBox.tsx';
+import { CalendarSettings } from './components/CalendarSettings.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
+import { SubscribeDialog } from './components/SubscribeDialog.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
 import { loadStringSet, saveStringSet } from './storage.ts';
 import { useReminders } from './useReminders.ts';
@@ -88,6 +97,9 @@ export function App({ user, onLogout }: AppProps) {
   const [hiddenCategories, setHiddenCategories] = useState(() =>
     loadStringSet(hiddenCategoriesKey),
   );
+  const [settingsFor, setSettingsFor] = useState<string | null>(null);
+  const [subscribing, setSubscribing] = useState(false);
+  const [invitations, setInvitations] = useState<InvitationDto[]>([]);
 
   const range = visibleRange(view, cursor);
   const from = range.from.getTime();
@@ -128,6 +140,78 @@ export function App({ user, onLogout }: AppProps) {
   }, [toast]);
 
   const showToast = (next: Omit<Toast, 'id'>) => setToast({ id: Date.now(), ...next });
+
+  const reloadCalendars = useCallback(
+    () =>
+      api
+        .listCalendars()
+        .then(setCalendars)
+        .catch(() => undefined),
+    [],
+  );
+
+  // Las invitaciones llegan cuando otra persona invita: se consultan al entrar y cada minuto.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api
+        .listInvitations()
+        .then((list) => !cancelled && setInvitations(list))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => void load(), 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const respondInvitation = async (invitation: InvitationDto, action: 'accept' | 'decline') => {
+    try {
+      await api.respondInvitation(invitation.calendarId, action);
+      setInvitations((list) => list.filter((i) => i.calendarId !== invitation.calendarId));
+      if (action === 'accept') {
+        await reloadCalendars();
+        setReloadKey((k) => k + 1);
+        showToast({ message: `Ahora ves «${invitation.calendarName}»` });
+      }
+    } catch (err) {
+      showToast({ message: err instanceof ApiError ? err.message : 'No se pudo responder' });
+    }
+  };
+
+  const leaveCalendar = async (calendar: CalendarDto) => {
+    if (!window.confirm(`¿Dejar de ver «${calendar.name}»? Tendrían que volver a invitarte.`))
+      return;
+    try {
+      await api.removeMember(calendar.id, user.id);
+      await reloadCalendars();
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      showToast({
+        message: err instanceof ApiError ? err.message : 'No se pudo salir del calendario',
+      });
+    }
+  };
+
+  // Solo lectura: calendarios compartidos como lector y calendarios que refleja una URL.
+  const calendarById = useMemo(() => new Map(calendars.map((c) => [c.id, c])), [calendars]);
+  const writableCalendars = useMemo(
+    () => calendars.filter((c) => c.role !== 'viewer' && !c.subscription),
+    [calendars],
+  );
+  const readOnlyReasonFor = (event: EventDto): string | undefined => {
+    const calendar = calendarById.get(event.calendarId);
+    if (!calendar) return undefined;
+    if (calendar.subscription) {
+      return `Este evento viene de un calendario sincronizado (${calendar.subscription.host}) y no se puede modificar aquí.`;
+    }
+    if (calendar.role === 'viewer') {
+      return `Tienes permiso de solo lectura en «${calendar.name}», de ${calendar.ownerName}.`;
+    }
+    return undefined;
+  };
+  const canEditEvent = (event: EventDto) => readOnlyReasonFor(event) === undefined;
 
   const handleChanged = (change: ChangeInfo) => {
     setReloadKey((k) => k + 1);
@@ -220,11 +304,6 @@ export function App({ user, onLogout }: AppProps) {
   const createCalendar = async (input: { name: string; color: string }) => {
     const created = await api.createCalendar(input);
     setCalendars((list) => [...list, created]);
-  };
-
-  const updateCalendar = async (id: string, input: { name: string; color: string }) => {
-    const updated = await api.updateCalendar(id, input);
-    setCalendars((list) => list.map((c) => (c.id === id ? updated : c)));
   };
 
   const toggleCategory = (id: string) => {
@@ -342,7 +421,11 @@ export function App({ user, onLogout }: AppProps) {
           hiddenCalendars={hiddenCalendars}
           onToggleCalendar={toggleCalendar}
           onCreateCalendar={createCalendar}
-          onUpdateCalendar={updateCalendar}
+          onOpenSettings={(calendar) => setSettingsFor(calendar.id)}
+          onOpenSubscribe={() => setSubscribing(true)}
+          onLeaveCalendar={(calendar) => void leaveCalendar(calendar)}
+          invitations={invitations}
+          onRespondInvitation={(invitation, action) => void respondInvitation(invitation, action)}
           categories={categories}
           hiddenCategories={hiddenCategories}
           onToggleCategory={toggleCategory}
@@ -359,6 +442,7 @@ export function App({ user, onLogout }: AppProps) {
               onSelectEvent={(event) => void openEvent(event)}
               onCreateOn={(day) => openCreate(day, true)}
               onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
+              canEdit={canEditEvent}
             />
           )}
           {view !== 'month' && (
@@ -372,6 +456,7 @@ export function App({ user, onLogout }: AppProps) {
               onSelectEvent={(event) => void openEvent(event)}
               onCreateAt={(start) => openCreate(start)}
               onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
+              canEdit={canEditEvent}
             />
           )}
         </main>
@@ -386,13 +471,36 @@ export function App({ user, onLogout }: AppProps) {
           )}
         </div>
       )}
+      {settingsFor && calendarById.get(settingsFor) && (
+        <CalendarSettings
+          key={settingsFor}
+          calendar={calendarById.get(settingsFor)!}
+          onClose={() => setSettingsFor(null)}
+          onSaved={(saved) =>
+            setCalendars((list) => list.map((c) => (c.id === saved.id ? saved : c)))
+          }
+          onEventsChanged={() => setReloadKey((k) => k + 1)}
+          onCalendarsChanged={() => void reloadCalendars()}
+        />
+      )}
+      {subscribing && (
+        <SubscribeDialog
+          onClose={() => setSubscribing(false)}
+          onSubscribed={({ calendar, result }) => {
+            setCalendars((list) => [...list, calendar]);
+            setReloadKey((k) => k + 1);
+            showToast({ message: `«${calendar.name}»: ${result.created} eventos importados` });
+          }}
+        />
+      )}
       {dialog && (
         <EventDialog
           // Nueva instancia (y estado de formulario) por cada evento o borrador abierto.
           key={dialog.kind === 'edit' ? `${dialog.event.id}-${dialog.event.version}` : 'new'}
           target={dialog}
-          calendars={calendars}
+          calendars={writableCalendars}
           categories={categories}
+          readOnlyReason={dialog.kind === 'edit' ? readOnlyReasonFor(dialog.event) : undefined}
           onClose={() => setDialog(null)}
           onChanged={handleChanged}
         />

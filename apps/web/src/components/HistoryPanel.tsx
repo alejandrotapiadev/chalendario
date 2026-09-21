@@ -52,6 +52,7 @@ export function HistoryPanel({ eventId, categories, busy, onRestore, onBack }: P
                 <div className="history-head">
                   <strong>Versión {v.version}</strong>
                   {v.isCurrent && <span className="badge">actual</span>}
+                  {v.author && <span className="muted">por {v.author}</span>}
                   <time className="muted" dateTime={v.createdAt}>
                     {stamp.format(new Date(v.createdAt))}
                   </time>

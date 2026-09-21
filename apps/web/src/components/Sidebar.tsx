@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import type { CalendarDto, CategoryDto } from '@calendar/shared';
+import type { CalendarDto, CategoryDto, InvitationDto } from '@calendar/shared';
 import { ApiError } from '../api.ts';
 
 interface Item {
@@ -150,13 +150,169 @@ function EditableList({
   );
 }
 
+interface CalendarsProps {
+  calendars: CalendarDto[];
+  hidden: Set<string>;
+  onToggle: (id: string) => void;
+  onCreate: (value: Value) => Promise<unknown>;
+  onOpenSettings: (calendar: CalendarDto) => void;
+  onOpenSubscribe: () => void;
+  onLeave: (calendar: CalendarDto) => void;
+}
+
+const ROLE_TAG = { editor: 'edita', viewer: 'lectura' } as const;
+
+/** Calendarios propios (con ajustes) y compartidos conmigo (con opción de dejar de verlos). */
+function CalendarLists({
+  calendars,
+  hidden,
+  onToggle,
+  onCreate,
+  onOpenSettings,
+  onOpenSubscribe,
+  onLeave,
+}: CalendarsProps) {
+  const [creating, setCreating] = useState(false);
+  const owned = calendars.filter((c) => c.role === 'owner');
+  const shared = calendars.filter((c) => c.role !== 'owner');
+
+  const row = (calendar: CalendarDto) => (
+    <li key={calendar.id}>
+      <div className="side-item">
+        <label className="side-check">
+          <input
+            type="checkbox"
+            checked={!hidden.has(calendar.id)}
+            style={{ accentColor: calendar.color }}
+            onChange={() => onToggle(calendar.id)}
+          />
+          <span className="side-name">{calendar.name}</span>
+          {calendar.subscription && (
+            <span
+              className="side-tag"
+              title={
+                calendar.subscription.lastError ?? `Sincronizado con ${calendar.subscription.host}`
+              }
+              aria-label="Calendario sincronizado"
+            >
+              {calendar.subscription.lastError ? '⚠' : '↻'}
+            </span>
+          )}
+          {calendar.role !== 'owner' && (
+            <span className="side-tag" title={`De ${calendar.ownerName ?? ''}`}>
+              {ROLE_TAG[calendar.role]}
+            </span>
+          )}
+        </label>
+        {calendar.role === 'owner' ? (
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={`Ajustes de ${calendar.name}`}
+            onClick={() => onOpenSettings(calendar)}
+          >
+            ⚙
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={`Dejar de ver ${calendar.name}`}
+            onClick={() => onLeave(calendar)}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {calendar.role !== 'owner' && <p className="side-owner muted">de {calendar.ownerName}</p>}
+    </li>
+  );
+
+  return (
+    <>
+      <section className="side-section">
+        <h2 className="side-title">Mis calendarios</h2>
+        <ul className="side-list">{owned.map(row)}</ul>
+        {creating ? (
+          <ItemEditor
+            initial={{ name: '', color: '#3b82f6' }}
+            submitLabel="Crear"
+            onSubmit={onCreate}
+            onCancel={() => setCreating(false)}
+          />
+        ) : (
+          <>
+            <button type="button" className="link" onClick={() => setCreating(true)}>
+              + Nuevo calendario
+            </button>
+            <button type="button" className="link side-link" onClick={onOpenSubscribe}>
+              + Suscribirse a una URL
+            </button>
+          </>
+        )}
+      </section>
+      {shared.length > 0 && (
+        <section className="side-section">
+          <h2 className="side-title">Compartidos conmigo</h2>
+          <ul className="side-list">{shared.map(row)}</ul>
+        </section>
+      )}
+    </>
+  );
+}
+
+function Invitations({
+  invitations,
+  onRespond,
+}: {
+  invitations: InvitationDto[];
+  onRespond: (invitation: InvitationDto, action: 'accept' | 'decline') => void;
+}) {
+  if (invitations.length === 0) return null;
+  return (
+    <section className="side-section invitations" aria-label="Invitaciones">
+      <h2 className="side-title">Invitaciones</h2>
+      <ul className="side-list">
+        {invitations.map((inv) => (
+          <li key={inv.calendarId} className="invitation">
+            <p>
+              <strong>{inv.invitedByName}</strong> te invita a «{inv.calendarName}» (
+              {inv.role === 'editor' ? 'puedes editar' : 'solo lectura'})
+            </p>
+            <div className="side-editor-row">
+              <button
+                type="button"
+                className="btn btn-small btn-primary"
+                onClick={() => onRespond(inv, 'accept')}
+              >
+                Aceptar
+              </button>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={() => onRespond(inv, 'decline')}
+              >
+                Rechazar
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 interface Props {
   open: boolean;
   calendars: CalendarDto[];
   hiddenCalendars: Set<string>;
   onToggleCalendar: (id: string) => void;
   onCreateCalendar: (value: Value) => Promise<unknown>;
-  onUpdateCalendar: (id: string, value: Value) => Promise<unknown>;
+  onOpenSettings: (calendar: CalendarDto) => void;
+  onOpenSubscribe: () => void;
+  onLeaveCalendar: (calendar: CalendarDto) => void;
+  invitations: InvitationDto[];
+  onRespondInvitation: (invitation: InvitationDto, action: 'accept' | 'decline') => void;
   categories: CategoryDto[];
   hiddenCategories: Set<string>;
   onToggleCategory: (id: string) => void;
@@ -170,7 +326,11 @@ export function Sidebar({
   hiddenCalendars,
   onToggleCalendar,
   onCreateCalendar,
-  onUpdateCalendar,
+  onOpenSettings,
+  onOpenSubscribe,
+  onLeaveCalendar,
+  invitations,
+  onRespondInvitation,
   categories,
   hiddenCategories,
   onToggleCategory,
@@ -179,15 +339,15 @@ export function Sidebar({
 }: Props) {
   return (
     <aside className={`sidebar ${open ? 'is-open' : ''}`} aria-label="Calendarios y categorías">
-      <EditableList
-        title="Mis calendarios"
-        newLabel="+ Nuevo calendario"
-        defaultColor="#3b82f6"
-        items={calendars}
+      <Invitations invitations={invitations} onRespond={onRespondInvitation} />
+      <CalendarLists
+        calendars={calendars}
         hidden={hiddenCalendars}
         onToggle={onToggleCalendar}
         onCreate={onCreateCalendar}
-        onUpdate={onUpdateCalendar}
+        onOpenSettings={onOpenSettings}
+        onOpenSubscribe={onOpenSubscribe}
+        onLeave={onLeaveCalendar}
       />
       <EditableList
         title="Categorías"

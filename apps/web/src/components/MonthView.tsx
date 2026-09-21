@@ -26,6 +26,8 @@ interface Props {
   onSelectDay: (day: Date) => void;
   onSelectEvent: (event: EventDto) => void;
   onCreateOn: (day: Date) => void;
+  /** ¿Se puede modificar el evento? Si no, tampoco se arrastra. */
+  canEdit: (event: EventDto) => boolean;
   /** Un evento se ha arrastrado a otro día. */
   onMoveEvent: (event: EventDto, start: Date, end: Date) => void;
 }
@@ -44,6 +46,7 @@ export function MonthView({
   onSelectEvent,
   onCreateOn,
   onMoveEvent,
+  canEdit,
 }: Props) {
   const today = new Date();
   const days = monthGridDays(cursor);
@@ -57,7 +60,7 @@ export function MonthView({
     from: Date,
   ) => {
     // Mover una serie entera arrastrando una ocurrencia sería ambiguo: se edita en el diálogo.
-    if (e.button !== 0 || event.recurrence) return;
+    if (e.button !== 0 || event.recurrence || !canEdit(event)) return;
     e.preventDefault();
     const reset = () => {
       setDragKey(null);

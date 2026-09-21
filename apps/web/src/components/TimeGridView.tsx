@@ -32,6 +32,8 @@ interface Props {
   onCreateAt: (start: Date) => void;
   /** Un evento se ha arrastrado o redimensionado a un nuevo intervalo. */
   onMoveEvent: (event: EventDto, start: Date, end: Date) => void;
+  /** ¿Se puede modificar el evento? Si no, tampoco se arrastra ni se redimensiona. */
+  canEdit: (event: EventDto) => boolean;
 }
 
 interface DragState {
@@ -51,6 +53,7 @@ export function TimeGridView({
   onSelectEvent,
   onCreateAt,
   onMoveEvent,
+  canEdit,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -91,7 +94,7 @@ export function TimeGridView({
     mode: DragState['mode'],
   ) => {
     // Mover una serie entera arrastrando una ocurrencia sería ambiguo: se edita en el diálogo.
-    if (e.button !== 0 || event.recurrence) return;
+    if (e.button !== 0 || event.recurrence || !canEdit(event)) return;
     e.preventDefault(); // evita seleccionar texto mientras se arrastra
     e.stopPropagation();
     const colWidth = e.currentTarget.closest<HTMLElement>('.tg-col')!.offsetWidth;
@@ -228,7 +231,7 @@ export function TimeGridView({
                       {timeFormat.format(first)} – {timeFormat.format(last)}
                     </span>
                   )}
-                  {!event.recurrence && (
+                  {!event.recurrence && canEdit(event) && (
                     <span
                       className="tg-resize"
                       aria-hidden="true"

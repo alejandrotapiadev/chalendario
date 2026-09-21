@@ -1,4 +1,4 @@
-import type { EventFields, EventSnapshot, EventStatus } from '@calendar/domain';
+import type { EventFields, EventSnapshot, EventStatus, RecurrenceRule } from '@calendar/domain';
 import type { EventDto } from '@calendar/shared';
 import type { Queryable } from '../../db.ts';
 
@@ -13,6 +13,8 @@ interface ContentRow {
   location: string;
   status: EventStatus;
   color: string | null;
+  recurrence: RecurrenceRule | null;
+  category_id: string | null;
   deleted: boolean;
 }
 
@@ -23,6 +25,8 @@ export interface EventRow extends ContentRow {
   version: number;
   created_at: Date;
   updated_at: Date;
+  /** Minutos de antelación de los recordatorios, ordenados. */
+  reminders: number[];
 }
 
 export interface VersionRow extends ContentRow {
@@ -37,7 +41,9 @@ const CURRENT_EVENTS = `
   SELECT e.id, e.calendar_id, e.series_id, e.current_version AS version,
          e.created_at, e.updated_at,
          v.title, v.description, v.start_at, v.end_at, v.timezone, v.all_day,
-         v.location, v.status, v.color, v.deleted
+         v.location, v.status, v.color, v.recurrence, v.category_id, v.deleted,
+         ARRAY(SELECT r.minutes_before FROM event_reminders r
+                WHERE r.event_id = e.id ORDER BY r.minutes_before) AS reminders
     FROM events e
     JOIN event_versions v ON v.event_id = e.id AND v.version = e.current_version
     JOIN calendars c ON c.id = e.calendar_id`;
@@ -53,7 +59,13 @@ export function rowToFields(row: ContentRow): EventFields {
     location: row.location,
     status: row.status,
     color: row.color,
+    recurrence: row.recurrence,
+    categoryId: row.category_id,
   };
+}
+
+export function rowToSnapshot(row: ContentRow): EventSnapshot {
+  return { ...rowToFields(row), deleted: row.deleted };
 }
 
 export function rowToDto(row: EventRow): EventDto {
@@ -71,42 +83,147 @@ export function rowToDto(row: EventRow): EventDto {
     location: row.location,
     status: row.status,
     color: row.color,
+    recurrence: row.recurrence,
+    categoryId: row.category_id,
+    reminders: row.reminders,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
 }
 
-/** Evento del usuario con su versión vigente (incluye los borrados). `lock` bloquea la fila. */
+/**
+ * Evento del usuario con su versión vigente (incluye los borrados). Con `lock`, bloquea antes
+ * la fila de `events` y **después** lee el estado en otra sentencia.
+ *
+ * No se junta todo en un `SELECT … FOR UPDATE` con joins: si otra transacción modifica el
+ * evento mientras esperamos el bloqueo, PostgreSQL vuelve a evaluar la fila bloqueada pero
+ * los demás joins siguen con el snapshot antiguo, con lo que la versión nueva (`event_versions`)
+ * no se encuentra y el evento parecería no existir. Una sentencia nueva ve lo ya confirmado.
+ */
 export async function findCurrent(
   db: Queryable,
   userId: string,
   id: string,
   { lock = false }: { lock?: boolean } = {},
 ): Promise<EventRow | null> {
+  if (lock) {
+    const { rowCount } = await db.query(
+      `SELECT 1 FROM events e JOIN calendars c ON c.id = e.calendar_id
+        WHERE e.id = $1 AND c.user_id = $2 FOR UPDATE OF e`,
+      [id, userId],
+    );
+    if (rowCount === 0) return null;
+  }
   const { rows } = await db.query<EventRow>(
-    `${CURRENT_EVENTS} WHERE e.id = $1 AND c.user_id = $2 ${lock ? 'FOR UPDATE OF e' : ''}`,
+    `${CURRENT_EVENTS} WHERE e.id = $1 AND c.user_id = $2`,
     [id, userId],
   );
   return rows[0] ?? null;
 }
 
-/** Eventos vigentes y no borrados que se solapan con [from, to). */
-export async function listCurrentInRange(
-  db: Queryable,
-  userId: string,
-  range: { from: Date; to: Date; calendarId?: string | undefined },
-): Promise<EventRow[]> {
-  const values: unknown[] = [userId, range.from, range.to];
-  let calendarFilter = '';
+export interface RangeQuery {
+  from: Date;
+  to: Date;
+  calendarId?: string | undefined;
+  categoryId?: string | undefined;
+}
+
+/** Filtros opcionales de calendario y categoría; añade sus valores a `values`. */
+function extraFilters(range: RangeQuery, values: unknown[]): string {
+  const parts: string[] = [];
   if (range.calendarId) {
     values.push(range.calendarId);
-    calendarFilter = 'AND e.calendar_id = $4';
+    parts.push(`AND e.calendar_id = $${values.length}`);
   }
+  if (range.categoryId) {
+    values.push(range.categoryId);
+    parts.push(`AND v.category_id = $${values.length}`);
+  }
+  return parts.join(' ');
+}
+
+/** Eventos vigentes y no borrados que **no** se repiten y se solapan con [from, to). */
+export async function listSingleInRange(
+  db: Queryable,
+  userId: string,
+  range: RangeQuery,
+): Promise<EventRow[]> {
+  const values: unknown[] = [userId, range.from, range.to];
+  const filters = extraFilters(range, values);
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE c.user_id = $1 AND NOT v.deleted AND v.start_at < $3 AND v.end_at > $2 ${calendarFilter}
+      WHERE c.user_id = $1 AND NOT v.deleted AND v.recurrence IS NULL
+        AND v.start_at < $3 AND v.end_at > $2 ${filters}
       ORDER BY v.start_at, v.end_at, e.id`,
     values,
+  );
+  return rows;
+}
+
+/**
+ * Series recurrentes vigentes que pueden tener ocurrencias antes de `range.to`. No se puede
+ * filtrar más en SQL (el fin depende de la regla): la expansión descarta lo que sobre.
+ */
+export async function listRecurringBefore(
+  db: Queryable,
+  userId: string,
+  range: RangeQuery,
+): Promise<EventRow[]> {
+  const values: unknown[] = [userId, range.to];
+  const filters = extraFilters(range, values);
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS}
+      WHERE c.user_id = $1 AND NOT v.deleted AND v.recurrence IS NOT NULL
+        AND v.start_at < $2 ${filters}
+      ORDER BY v.start_at, e.id`,
+    values,
+  );
+  return rows;
+}
+
+const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * Busca en título, descripción y ubicación, sin distinguir mayúsculas ni acentos. Devuelve
+ * el evento tal como está definido (la primera ocurrencia si se repite), lo más reciente
+ * primero.
+ */
+export async function searchCurrent(
+  db: Queryable,
+  userId: string,
+  q: string,
+  limit: number,
+): Promise<EventRow[]> {
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS}
+      WHERE c.user_id = $1 AND NOT v.deleted
+        AND (unaccent(v.title) ILIKE unaccent($2)
+          OR unaccent(v.description) ILIKE unaccent($2)
+          OR unaccent(v.location) ILIKE unaccent($2))
+      ORDER BY v.start_at DESC, e.id
+      LIMIT $3`,
+    [userId, `%${escapeLike(q)}%`, limit],
+  );
+  return rows;
+}
+
+/**
+ * Eventos vivos con recordatorios que podrían tener uno activo en `at`: los que no se
+ * repiten y aún no han terminado, y las series que ya han empezado o empiezan antes de `horizon`.
+ */
+export async function listReminderCandidates(
+  db: Queryable,
+  userId: string,
+  at: Date,
+  horizon: Date,
+): Promise<EventRow[]> {
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS}
+      WHERE c.user_id = $1 AND NOT v.deleted AND v.status <> 'cancelled'
+        AND EXISTS (SELECT 1 FROM event_reminders r WHERE r.event_id = e.id)
+        AND v.start_at <= $3
+        AND (v.recurrence IS NOT NULL OR v.end_at > $2)`,
+    [userId, at, horizon],
   );
   return rows;
 }
@@ -133,8 +250,8 @@ export async function insertVersion(db: Queryable, v: NewVersion): Promise<void>
   await db.query(
     `INSERT INTO event_versions
        (event_id, version, title, description, start_at, end_at, timezone, all_day,
-        location, status, color, deleted, created_by, change_reason)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        location, status, color, recurrence, category_id, deleted, created_by, change_reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16)`,
     [
       v.eventId,
       v.version,
@@ -147,6 +264,8 @@ export async function insertVersion(db: Queryable, v: NewVersion): Promise<void>
       f.location,
       f.status,
       f.color,
+      f.recurrence === null ? null : JSON.stringify(f.recurrence),
+      f.categoryId,
       v.deleted,
       v.createdBy,
       v.changeReason,
@@ -165,13 +284,28 @@ export async function setCurrentVersion(
   ]);
 }
 
-export function rowToSnapshot(row: ContentRow): EventSnapshot {
-  return { ...rowToFields(row), deleted: row.deleted };
+/** Deja exactamente estos recordatorios (minutos de antelación) en el evento. */
+export async function replaceReminders(
+  db: Queryable,
+  eventId: string,
+  minutes: number[],
+): Promise<void> {
+  await db.query(
+    'DELETE FROM event_reminders WHERE event_id = $1 AND NOT (minutes_before = ANY($2::int[]))',
+    [eventId, minutes],
+  );
+  await db.query(
+    `INSERT INTO event_reminders (event_id, minutes_before)
+     SELECT $1, m FROM unnest($2::int[]) AS m
+     ON CONFLICT (event_id, minutes_before, channel) DO NOTHING`,
+    [eventId, minutes],
+  );
 }
 
 const VERSION_COLUMNS = `
   v.version, v.title, v.description, v.start_at, v.end_at, v.timezone, v.all_day,
-  v.location, v.status, v.color, v.deleted, v.created_at, v.change_reason`;
+  v.location, v.status, v.color, v.recurrence, v.category_id, v.deleted, v.created_at,
+  v.change_reason`;
 
 /**
  * Historial completo de un evento del usuario, de la versión más antigua a la más reciente.

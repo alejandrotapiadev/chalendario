@@ -4,6 +4,7 @@ import {
   createEventSchema,
   listEventsQuerySchema,
   restoreEventSchema,
+  searchEventsQuerySchema,
   updateEventSchema,
   versionParamsSchema,
 } from '@calendar/shared';
@@ -16,6 +17,7 @@ import {
   listEvents,
   listVersions,
   restoreVersion,
+  searchEvents,
   updateEvent,
 } from './events.service.ts';
 
@@ -25,6 +27,12 @@ export function registerEventRoutes(app: FastifyInstance, db: Db): void {
   app.get('/events', async (request) => {
     const query = listEventsQuerySchema.parse(request.query);
     return listEvents(db, request.userId, query);
+  });
+
+  // Ruta estática: tiene prioridad sobre `/events/:id`.
+  app.get('/events/search', async (request) => {
+    const query = searchEventsQuerySchema.parse(request.query);
+    return searchEvents(db, request.userId, query);
   });
 
   app.get('/events/:id', async (request) => {

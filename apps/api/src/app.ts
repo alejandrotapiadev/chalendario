@@ -11,7 +11,9 @@ import {
 } from './modules/auth/auth.routes.ts';
 import { DEFAULT_SCRYPT } from './modules/auth/password.ts';
 import { registerCalendarRoutes } from './modules/calendars/calendars.routes.ts';
+import { registerCategoryRoutes } from './modules/categories/categories.routes.ts';
 import { registerEventRoutes } from './modules/events/events.routes.ts';
+import { registerReminderRoutes } from './modules/reminders/reminders.routes.ts';
 import { registerHealthRoutes } from './routes/health.ts';
 
 export interface AppDeps extends Partial<AuthOptions> {
@@ -20,8 +22,7 @@ export interface AppDeps extends Partial<AuthOptions> {
 }
 
 /**
- * Monolito modular: cada módulo (auth, calendars, events y, más adelante, recurrence,
- * reminders y versioning) registra aquí sus rutas. Ver docs/architecture.md.
+ * Monolito modular: cada módulo (auth, calendars, categories, events, reminders) registra aquí sus rutas. Ver docs/architecture.md.
  */
 export function buildApp({
   db,
@@ -48,7 +49,9 @@ export function buildApp({
     requireSession(authed, db);
     registerSessionRoutes(authed, db, auth);
     registerCalendarRoutes(authed, db);
+    registerCategoryRoutes(authed, db);
     registerEventRoutes(authed, db);
+    registerReminderRoutes(authed, db);
   });
 
   return app;

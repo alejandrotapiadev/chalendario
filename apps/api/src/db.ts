@@ -29,3 +29,8 @@ export async function withTransaction<T>(db: Db, fn: (tx: Queryable) => Promise<
     client.release();
   }
 }
+
+/** Violación de una restricción UNIQUE (código SQLSTATE 23505). */
+export function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'code' in err && err.code === '23505';
+}

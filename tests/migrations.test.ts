@@ -2,7 +2,15 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dropEverything, migrate, testDatabaseUrl } from './helpers/db.ts';
 
-const TABLES = ['calendars', 'event_versions', 'events', 'sessions', 'users'];
+const TABLES = [
+  'calendars',
+  'categories',
+  'event_reminders',
+  'event_versions',
+  'events',
+  'sessions',
+  'users',
+];
 
 // Requiere PostgreSQL: `pnpm db:up` en local; en CI lo aporta un service container.
 describe.skipIf(!testDatabaseUrl)('migraciones', () => {

@@ -22,6 +22,10 @@ export interface CalendarDto {
   color: string;
   createdAt: string;
   updatedAt: string;
+  /** Papel del usuario actual en este calendario. */
+  role: 'owner' | 'editor' | 'viewer';
+  /** Nombre del propietario cuando el calendario es de otra persona; null si es tuyo. */
+  ownerName: string | null;
   /** Si refleja una URL `.ics` externa (entonces es de solo lectura), datos de la suscripción. */
   subscription: {
     /** Dominio de la URL; el resto puede contener un secreto y no se devuelve. */

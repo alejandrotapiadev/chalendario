@@ -173,6 +173,8 @@ export interface EventVersionDto {
   /** Esta versión marca el evento como borrado. */
   deleted: boolean;
   createdAt: string;
+  /** Quién hizo este cambio (relevante en calendarios compartidos). */
+  author: string | null;
   /** Motivo del cambio: `deleted`, `restored from version N`, o el que indicó el usuario. */
   changeReason: string | null;
   /** Qué cambió respecto a la versión anterior (vacío en la versión 1). */

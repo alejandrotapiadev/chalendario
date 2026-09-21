@@ -45,11 +45,12 @@ let counter = 0;
 export async function signUp(
   app: FastifyInstance,
   email = `user${++counter}@example.com`,
+  name = 'Test',
 ): Promise<TestUser> {
   const res = await app.inject({
     method: 'POST',
     url: '/auth/register',
-    payload: { email, password: TEST_PASSWORD, name: 'Test' },
+    payload: { email, password: TEST_PASSWORD, name },
   });
   if (res.statusCode !== 201) throw new Error(`registro falló: ${res.statusCode} ${res.body}`);
   const cookie = `sid=${res.cookies.find((c) => c.name === 'sid')!.value}`;

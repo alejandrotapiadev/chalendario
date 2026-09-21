@@ -16,6 +16,7 @@ import { registerEventRoutes } from './modules/events/events.routes.ts';
 import { registerFeedRoute, registerInteropRoutes } from './modules/interop/interop.routes.ts';
 import { defaultFetchIcs, type FetchIcs } from './modules/interop/interop.service.ts';
 import { registerReminderRoutes } from './modules/reminders/reminders.routes.ts';
+import { registerSharingRoutes } from './modules/sharing/sharing.routes.ts';
 import { registerHealthRoutes } from './routes/health.ts';
 
 export interface AppDeps extends Partial<AuthOptions> {
@@ -61,6 +62,7 @@ export function buildApp({
     registerEventRoutes(authed, db);
     registerReminderRoutes(authed, db);
     registerInteropRoutes(authed, db, fetchIcs);
+    registerSharingRoutes(authed, db, { rateLimit: limitLogins });
   });
 
   return app;

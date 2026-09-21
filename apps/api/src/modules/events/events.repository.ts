@@ -1,6 +1,7 @@
 import type { EventFields, EventSnapshot, EventStatus, RecurrenceRule } from '@calendar/domain';
 import type { EventDto } from '@calendar/shared';
 import type { Queryable } from '../../db.ts';
+import { readableBy } from '../calendars/access.ts';
 
 /** Columnas de contenido que tienen en común las versiones y el estado actual. */
 interface ContentRow {
@@ -35,6 +36,8 @@ export interface VersionRow extends ContentRow {
   version: number;
   created_at: Date;
   change_reason: string | null;
+  /** Nombre de quien hizo el cambio. */
+  author_name: string | null;
 }
 
 // Estado actual = fila de `events` + su versión vigente. El join con `calendars` acota
@@ -111,13 +114,13 @@ export async function findCurrent(
   if (lock) {
     const { rowCount } = await db.query(
       `SELECT 1 FROM events e JOIN calendars c ON c.id = e.calendar_id
-        WHERE e.id = $1 AND c.user_id = $2 FOR UPDATE OF e`,
+        WHERE e.id = $1 AND ${readableBy('$2')} FOR UPDATE OF e`,
       [id, userId],
     );
     if (rowCount === 0) return null;
   }
   const { rows } = await db.query<EventRow>(
-    `${CURRENT_EVENTS} WHERE e.id = $1 AND c.user_id = $2`,
+    `${CURRENT_EVENTS} WHERE e.id = $1 AND ${readableBy('$2')}`,
     [id, userId],
   );
   return rows[0] ?? null;
@@ -154,7 +157,7 @@ export async function listSingleInRange(
   const filters = extraFilters(range, values);
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE c.user_id = $1 AND NOT v.deleted AND v.recurrence IS NULL
+      WHERE ${readableBy('$1')} AND NOT v.deleted AND v.recurrence IS NULL
         AND v.start_at < $3 AND v.end_at > $2 ${filters}
       ORDER BY v.start_at, v.end_at, e.id`,
     values,
@@ -175,7 +178,7 @@ export async function listRecurringBefore(
   const filters = extraFilters(range, values);
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE c.user_id = $1 AND NOT v.deleted AND v.recurrence IS NOT NULL
+      WHERE ${readableBy('$1')} AND NOT v.deleted AND v.recurrence IS NOT NULL
         AND v.start_at < $2 ${filters}
       ORDER BY v.start_at, e.id`,
     values,
@@ -198,7 +201,7 @@ export async function searchCurrent(
 ): Promise<EventRow[]> {
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE c.user_id = $1 AND NOT v.deleted
+      WHERE ${readableBy('$1')} AND NOT v.deleted
         AND (unaccent(v.title) ILIKE unaccent($2)
           OR unaccent(v.description) ILIKE unaccent($2)
           OR unaccent(v.location) ILIKE unaccent($2))
@@ -221,7 +224,7 @@ export async function listReminderCandidates(
 ): Promise<EventRow[]> {
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE c.user_id = $1 AND NOT v.deleted AND v.status <> 'cancelled'
+      WHERE ${readableBy('$1')} AND NOT v.deleted AND v.status <> 'cancelled'
         AND EXISTS (SELECT 1 FROM event_reminders r WHERE r.event_id = e.id)
         AND v.start_at <= $3
         AND (v.recurrence IS NOT NULL OR v.end_at > $2)`,
@@ -363,7 +366,7 @@ export async function replaceReminders(
 const VERSION_COLUMNS = `
   v.version, v.title, v.description, v.start_at, v.end_at, v.timezone, v.all_day,
   v.location, v.status, v.color, v.recurrence, v.category_id, v.deleted, v.created_at,
-  v.change_reason`;
+  v.change_reason, au.name AS author_name`;
 
 /**
  * Historial completo de un evento del usuario, de la versión más antigua a la más reciente.
@@ -379,7 +382,8 @@ export async function listVersionRows(
        FROM event_versions v
        JOIN events e ON e.id = v.event_id
        JOIN calendars c ON c.id = e.calendar_id
-      WHERE v.event_id = $1 AND c.user_id = $2
+       LEFT JOIN users au ON au.id = v.created_by
+      WHERE v.event_id = $1 AND ${readableBy('$2')}
       ORDER BY v.version`,
     [eventId, userId],
   );
@@ -397,7 +401,8 @@ export async function findVersionRow(
        FROM event_versions v
        JOIN events e ON e.id = v.event_id
        JOIN calendars c ON c.id = e.calendar_id
-      WHERE v.event_id = $1 AND c.user_id = $2 AND v.version = $3`,
+       LEFT JOIN users au ON au.id = v.created_by
+      WHERE v.event_id = $1 AND ${readableBy('$2')} AND v.version = $3`,
     [eventId, userId, version],
   );
   return rows[0] ?? null;

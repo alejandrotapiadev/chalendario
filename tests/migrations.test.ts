@@ -6,6 +6,7 @@ import { dropEverything, migrate, testDatabaseUrl } from './helpers/db.ts';
 // regional y trata distinto los guiones bajos.
 const TABLES = [
   'calendar_feeds',
+  'calendar_members',
   'calendar_subscriptions',
   'calendars',
   'categories',

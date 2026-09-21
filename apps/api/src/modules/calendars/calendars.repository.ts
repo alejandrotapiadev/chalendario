@@ -1,5 +1,6 @@
 import type { CalendarDto } from '@calendar/shared';
 import type { Queryable } from '../../db.ts';
+import { readableBy, type CalendarRole } from './access.ts';
 
 interface CalendarRow {
   id: string;
@@ -7,15 +8,25 @@ interface CalendarRow {
   color: string;
   created_at: Date;
   updated_at: Date;
+  role: CalendarRole;
+  owner_name: string;
+  owner_id: string;
   sub_url: string | null;
   last_synced_at: Date | null;
   last_error: string | null;
 }
 
+// `$1` es siempre el usuario que consulta. Incluye los calendarios propios y los compartidos
+// con él (invitación aceptada).
 const SELECT = `
-  SELECT c.id, c.name, c.color, c.created_at, c.updated_at,
+  SELECT c.id, c.name, c.color, c.created_at, c.updated_at, c.user_id AS owner_id,
+         CASE WHEN c.user_id = $1 THEN 'owner' ELSE m.role END AS role,
+         o.name AS owner_name,
          s.url AS sub_url, s.last_synced_at, s.last_error
     FROM calendars c
+    JOIN users o ON o.id = c.user_id
+    LEFT JOIN calendar_members m
+           ON m.calendar_id = c.id AND m.user_id = $1 AND m.status = 'accepted'
     LEFT JOIN calendar_subscriptions s ON s.calendar_id = c.id`;
 
 function toDto(row: CalendarRow): CalendarDto {
@@ -25,6 +36,8 @@ function toDto(row: CalendarRow): CalendarDto {
     color: row.color,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    role: row.role,
+    ownerName: row.role === 'owner' ? null : row.owner_name,
     // De la URL solo se expone el dominio: puede llevar un secreto en la ruta.
     subscription: row.sub_url
       ? {
@@ -38,7 +51,7 @@ function toDto(row: CalendarRow): CalendarDto {
 
 export async function listCalendars(db: Queryable, userId: string): Promise<CalendarDto[]> {
   const { rows } = await db.query<CalendarRow>(
-    `${SELECT} WHERE c.user_id = $1 ORDER BY c.created_at, c.name`,
+    `${SELECT} WHERE ${readableBy('$1')} ORDER BY (c.user_id <> $1), c.created_at, c.name`,
     [userId],
   );
   return rows.map(toDto);
@@ -49,10 +62,10 @@ export async function getCalendar(
   userId: string,
   id: string,
 ): Promise<CalendarDto | null> {
-  const { rows } = await db.query<CalendarRow>(`${SELECT} WHERE c.id = $1 AND c.user_id = $2`, [
-    id,
-    userId,
-  ]);
+  const { rows } = await db.query<CalendarRow>(
+    `${SELECT} WHERE c.id = $2 AND ${readableBy('$1')}`,
+    [userId, id],
+  );
   return rows[0] ? toDto(rows[0]) : null;
 }
 

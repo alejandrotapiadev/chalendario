@@ -17,7 +17,8 @@ import type {
 } from '@calendar/shared';
 import { withTransaction, type Db, type Queryable } from '../../db.ts';
 import { ConflictError, NotFoundError } from '../../errors.ts';
-import { calendarBelongsToUser, isSubscribed } from '../calendars/calendars.repository.ts';
+import { assertCanEdit } from '../calendars/access.ts';
+import { isSubscribed } from '../calendars/calendars.repository.ts';
 import { categoryBelongsToUser } from '../categories/categories.repository.ts';
 import {
   findCurrent,
@@ -184,9 +185,7 @@ export async function createEvent(
   });
 
   return withTransaction(db, async (tx) => {
-    if (!(await calendarBelongsToUser(tx, userId, calendarId))) {
-      throw new NotFoundError('Calendario');
-    }
+    await assertCanEdit(tx, userId, calendarId);
     await assertWritable(tx, calendarId);
     await assertCategoryOwned(tx, userId, fields.categoryId);
 
@@ -210,6 +209,7 @@ export async function updateEvent(
 
   return withTransaction(db, async (tx) => {
     const row = await lockLiveEvent(tx, userId, id);
+    await assertCanEdit(tx, userId, row.calendar_id);
     await assertWritable(tx, row.calendar_id);
     if (expectedVersion !== undefined && expectedVersion !== row.version) {
       throw new ConflictError(
@@ -242,6 +242,7 @@ export async function updateEvent(
 export async function deleteEvent(db: Db, userId: string, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
     const row = await lockLiveEvent(tx, userId, id);
+    await assertCanEdit(tx, userId, row.calendar_id);
     await assertWritable(tx, row.calendar_id);
     await appendVersion(
       tx,
@@ -272,6 +273,7 @@ function toVersionDtos(eventId: string, rows: VersionRow[]): EventVersionDto[] {
     deleted: row.deleted,
     createdAt: row.created_at.toISOString(),
     changeReason: row.change_reason,
+    author: row.author_name,
     changes: describeChanges(i > 0 ? rowToSnapshot(rows[i - 1]!) : null, rowToSnapshot(row)),
   }));
 }
@@ -315,6 +317,7 @@ export async function restoreVersion(
   return withTransaction(db, async (tx) => {
     const row = await findCurrent(tx, userId, id, { lock: true });
     if (!row) throw new NotFoundError('Evento');
+    await assertCanEdit(tx, userId, row.calendar_id);
     await assertWritable(tx, row.calendar_id);
     if (expectedVersion !== undefined && expectedVersion !== row.version) {
       throw new ConflictError(

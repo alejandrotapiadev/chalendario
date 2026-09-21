@@ -12,6 +12,7 @@ import type {
 import { withTransaction, type Db, type Queryable } from '../../db.ts';
 import { AppError, ConflictError, NotFoundError } from '../../errors.ts';
 import { UnsafeUrlError, fetchText, parseSubscriptionUrl } from '../../net/safe-fetch.ts';
+import { assertCanEdit } from '../calendars/access.ts';
 import {
   calendarBelongsToUser,
   getCalendar,
@@ -112,8 +113,7 @@ export async function importIcs(
 ): Promise<ImportResultDto> {
   const parsed = parseOrFail(input.ics, input.timezone);
   return withTransaction(db, async (tx) => {
-    if (!(await calendarBelongsToUser(tx, userId, calendarId)))
-      throw new NotFoundError('Calendario');
+    await assertCanEdit(tx, userId, calendarId);
     if (await isSubscribed(tx, calendarId)) {
       throw new ConflictError(
         'calendar_read_only',

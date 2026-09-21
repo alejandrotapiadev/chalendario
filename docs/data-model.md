@@ -1,6 +1,6 @@
 # Modelo de datos
 
-> Estado: implementado hasta la fase 2 (migraciones 002–005; el versionado no necesitó
+> Estado: implementado hasta la fase 2 (migraciones 002–006; el versionado no necesitó
 > ninguna nueva). Recordatorios y recurrencia son diseño para la fase 3.
 > Regla clave (ADR-002): **cada modificación de un evento crea una nueva versión; las
 > versiones nunca se modifican.**
@@ -8,8 +8,9 @@
 ## Usuarios y calendarios
 
 ```
-users:     id, email (citext, único), name, password_hash (nulo por ahora), created_at, updated_at
+users:     id, email (citext, único), name, password_hash (scrypt), created_at, updated_at
 calendars: id, user_id -> users, name, color (#rrggbb), created_at, updated_at
+sessions:  id, user_id -> users (ON DELETE CASCADE), token_hash (SHA-256, único), created_at, expires_at
 ```
 
 Un evento pertenece a un calendario y un calendario a un usuario: toda consulta de eventos

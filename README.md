@@ -20,13 +20,23 @@ pnpm dev:api        # http://localhost:3000/health
 pnpm dev:web        # http://localhost:5173 (proxy /api -> :3000)
 ```
 
-> Aún no hay autenticación: la API actúa como un único usuario local. No la expongas
-> fuera de tu máquina.
+La primera vez, crea tu cuenta en la pantalla de acceso (email y contraseña de 8+
+caracteres). Cuando tengas la tuya, pon `REGISTRATION_OPEN=false` en `.env` para cerrar el
+alta de cuentas nuevas. Detalles en [ADR-007](docs/decisions/007-authentication.md).
+
+En la interfaz: **arrastra** un evento para moverlo (en semana/día también a otra
+hora o día, con saltos de 15 min), **arrastra su borde inferior** para cambiar la duración,
+y en la vista mensual arrástralo a otro día. Escape cancela; tras cada cambio hay un aviso
+con «Deshacer». La barra lateral crea, renombra y recolorea calendarios y los muestra u oculta.
 
 ## API
 
 | Método y ruta                       | Descripción                                                                                                          |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/register`               | Crear cuenta e iniciar sesión (cookie `sid`); 409 si el email existe                                                 |
+| `POST /auth/login`                  | Iniciar sesión; 401 genérico si los datos no son correctos                                                           |
+| `POST /auth/logout`                 | Cerrar sesión; 204                                                                                                   |
+| `GET /auth/me`                      | Usuario de la sesión actual                                                                                          |
 | `GET /health`                       | Estado del servicio y de la base de datos                                                                            |
 | `GET /calendars`                    | Calendarios del usuario                                                                                              |
 | `POST /calendars`                   | Crear calendario (`name`, `color?`)                                                                                  |
@@ -40,8 +50,9 @@ pnpm dev:web        # http://localhost:5173 (proxy /api -> :3000)
 | `GET /events/:id/versions/:version` | Una versión concreta                                                                                                 |
 | `POST /events/:id/restore/:version` | Restaurar: crea una versión nueva con ese contenido (también recupera un evento borrado); `expectedVersion` opcional |
 
+Todas las rutas salvo `/health`, `/auth/register` y `/auth/login` exigen sesión (401 si no).
 Los contratos (esquemas zod y DTOs) están en `packages/shared`. Errores:
-`{ error, message, issues? }` con 400 (validación), 404, 409 (`version_conflict`).
+`{ error, message, issues? }` con 400 (validación), 401, 404, 409 (`version_conflict`), 429.
 
 ## Comandos
 

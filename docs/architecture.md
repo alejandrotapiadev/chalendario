@@ -29,10 +29,9 @@ Cada módulo sigue la misma forma: `*.routes.ts` (HTTP + validación con los esq
 `@calendar/shared`), `*.service.ts` (casos de uso y transacciones, cuando hay lógica) y
 `*.repository.ts` (SQL). Las reglas de negocio no viven aquí sino en `packages/domain`.
 
-**Autenticación provisional:** el módulo `auth` actúa como un único usuario local
-(`DEV_USER_EMAIL`), creado en la primera petición con un calendario «Personal». Los módulos
-solo leen `request.userId`, así que sustituirlo por autenticación real no les afecta.
-Mientras tanto, la API no debe exponerse fuera de localhost.
+**Autenticación:** sesiones en cookie `HttpOnly` respaldadas por la tabla `sessions`
+(ADR-007). Todo lo registrado dentro del scope protegido de `buildApp` pasa por un hook
+`onRequest` que valida la cookie y fija `request.userId`; los módulos solo leen ese valor.
 
 `packages/domain` contiene la lógica pura (sin I/O ni dependencias de framework), de modo
 que se pueda testear en aislamiento y reutilizar en el frontend (p. ej. expandir

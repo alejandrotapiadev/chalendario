@@ -1,6 +1,6 @@
 # Modelo de datos
 
-> Estado: implementado hasta la fase 3 (migraciones 002–010).
+> Estado: implementado hasta la fase 4 (migraciones 002–013).
 > Regla clave (ADR-002): **cada modificación de un evento crea una nueva versión; las
 > versiones nunca se modifican.**
 
@@ -11,10 +11,16 @@ users:     id, email (citext, único), name, password_hash (scrypt), created_at,
 calendars: id, user_id -> users, name, color (#rrggbb), created_at, updated_at
 sessions:  id, user_id -> users (ON DELETE CASCADE), token_hash (SHA-256, único), created_at, expires_at
 categories: id, user_id -> users, name (citext, único por usuario), color (#rrggbb), created_at, updated_at
+calendar_members:       calendar_id, user_id -> users, role (viewer|editor), status (pending|accepted),
+                        invited_by, created_at, responded_at        PK (calendar_id, user_id)
+calendar_feeds:         calendar_id (PK), token_hash (SHA-256, único), created_at
+calendar_subscriptions: calendar_id (PK), url, timezone, last_synced_at, last_attempt_at, last_error
 ```
 
-Un evento pertenece a un calendario y un calendario a un usuario: toda consulta de eventos
-se acota por `calendars.user_id`.
+Un evento pertenece a un calendario y un calendario a un usuario (el propietario). Toda consulta
+de eventos se acota por acceso: propietario **o** miembro con invitación aceptada (ADR-011). Las
+invitaciones pendientes no dan acceso. `events.uid` guarda el UID externo de los eventos que
+vienen de una importación o de una suscripción (ADR-010).
 
 ## Eventos: estado actual + historial inmutable
 
@@ -125,3 +131,24 @@ hora ya pasó y cuya ocurrencia no ha terminado (ADR-009).
 `GET /events/search?q=` busca en título, descripción y ubicación con `unaccent` + `ILIKE`
 (sin distinguir mayúsculas ni acentos; `%` y `_` se tratan como texto). Recorre cualquier fecha,
 usa el contenido vigente y devuelve cada serie una sola vez.
+
+## Calendarios compartidos
+
+Roles y permisos en el ADR-011. Resumen: propietario, editor (escribe eventos) y lector (solo lee).
+Solo el propietario gestiona miembros, ajustes, enlace `.ics` y suscripción. Cada versión de un
+evento guarda `created_by`, y el historial muestra su autor.
+
+## Interoperabilidad
+
+- **Exportar / importar** un calendario en `.ics`. Importar es un _upsert_ por UID que crea
+  versiones con `change_reason = 'import'` (o `'sync'` al sincronizar una URL).
+- **Enlace de suscripción** de solo lectura (`calendar_feeds`), con token del que solo se guarda el
+  hash.
+- **Suscripción a una URL** (`calendar_subscriptions`): el calendario refleja un `.ics` externo y es de
+  solo lectura para todos. Detalles, límites de seguridad (SSRF) y alcance en el ADR-010.
+
+## Zona horaria de un evento
+
+`timezone` (IANA) es la zona en la que se creó y en la que se interpretan sus horas y su
+repetición (ADR-012); los instantes `start_at`/`end_at` son absolutos. La interfaz dibuja siempre
+en la zona del navegador.

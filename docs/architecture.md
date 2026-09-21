@@ -50,6 +50,13 @@ necesidad real lo pida (recordatorios → worker; caché → Redis).
 - **Migraciones:** SQL puro en `migrations/` (ver ADR-004).
 - **Recurrencia:** una regla en el evento y ocurrencias calculadas al consultar, en el dominio
   puro (ADR-008).
+- **Interoperabilidad:** ICS puro en el dominio; importar es un _upsert_ por UID que crea versiones;
+  enlace público de solo lectura y suscripción a URLs con descarga protegida contra SSRF. La
+  sincronización periódica corre dentro del proceso de la API (ADR-010).
+- **Compartir:** roles propietario/editor/lector con un único predicado de acceso en las consultas
+  y un chequeo antes de escribir (ADR-011).
+- **Sin conexión:** service worker de lectura en la versión compilada; escribir requiere red y los
+  conflictos de edición se resuelven con un panel sobre `expectedVersion` (ADR-012).
 - **Recordatorios:** calculados al consultar y consultados por el cliente cada 30 s, sin cola ni
   worker (ADR-009). El módulo `reminders` lee de `events` a través de su repositorio.
 - **Testing:** Vitest; unitarios junto al código, integración en `tests/`.

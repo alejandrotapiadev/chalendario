@@ -9,13 +9,16 @@ Frontend (apps/web)
 API (apps/api)
    ├── auth
    ├── calendars
-   ├── events
-   ├── recurrence
+   ├── categories
+   ├── events        (versionado y recurrencia incluidos, ver ADR-014)
+   ├── interop        (.ics, enlaces de suscripción, sincronización)
    ├── reminders
-   └── versioning
+   └── sharing
            |
            v
        PostgreSQL
+
+packages/domain: recurrencia, versionado (qué cambió) e ICS — lógica pura, sin I/O.
 ```
 
 Monolito modular: un solo proceso, con la separación lógica en módulos dentro de
@@ -23,7 +26,8 @@ Monolito modular: un solo proceso, con la separación lógica en módulos dentro
 (`apps/api/src/app.ts`). Cada módulo es dueño de sus tablas y solo él las escribe; los
 demás usan su interfaz pública (p. ej. `events` pregunta a `calendars` si un calendario es
 del usuario). La única excepción es de lectura: las consultas de eventos hacen `JOIN` con
-`calendars` para acotar los resultados al usuario.
+`calendars` para acotar los resultados al usuario. El MVP proponía módulos `recurrence` y
+`versioning` separados; se decidió no crearlos como tales (ADR-014).
 
 Cada módulo sigue la misma forma: `*.routes.ts` (HTTP + validación con los esquemas de
 `@calendar/shared`), `*.service.ts` (casos de uso y transacciones, cuando hay lógica) y

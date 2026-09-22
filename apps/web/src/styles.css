@@ -188,6 +188,13 @@ textarea {
   cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
+  /* Con el dedo, un toque aquí no hace scroll de la página: arrastra o abre el evento. */
+  touch-action: none;
+}
+.chip:focus-visible,
+.tg-event:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .chip-title {
   overflow: hidden;
@@ -408,6 +415,7 @@ textarea {
   line-height: 1.3;
   overflow: hidden;
   cursor: pointer;
+  touch-action: none;
 }
 .tg-event.is-dragging {
   z-index: 4;
@@ -421,6 +429,7 @@ textarea {
   inset: auto 0 0;
   height: 8px;
   cursor: ns-resize;
+  touch-action: none;
 }
 .tg-event:hover {
   background: color-mix(in srgb, var(--event-color) 35%, var(--bg));

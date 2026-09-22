@@ -6,6 +6,9 @@ coverage/
 .env.*
 !.env.example
 .vite/
+playwright-report/
+test-results/
+blob-report/
 *.log
 .DS_Store
 Thumbs.db

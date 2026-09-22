@@ -7,6 +7,7 @@ import {
   isSameDay,
   monthGridDays,
   toDateInput,
+  toDisplay,
 } from '../calendar/dates.ts';
 import { moveSpan } from '../calendar/drag.ts';
 import { eventsForDay } from '../calendar/layout.ts';
@@ -30,6 +31,8 @@ interface Props {
   canEdit: (event: EventDto) => boolean;
   /** Un evento se ha arrastrado a otro día. */
   onMoveEvent: (event: EventDto, start: Date, end: Date) => void;
+  /** Zona horaria en la que se pinta y se arrastra (T-10). */
+  timeZone: string;
 }
 
 /** Día (de la cuadrícula) que hay bajo el puntero, si lo hay. */
@@ -37,6 +40,23 @@ function dayAt(x: number, y: number): Date | null {
   const cell = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-day]');
   return cell?.dataset.day ? fromInputs(cell.dataset.day) : null;
 }
+
+/** Nombre accesible de un chip: más completo que el texto visible (hora, repetición…). */
+function describeChip(event: EventDto, time: string | null): string {
+  const parts = [event.title];
+  if (time) parts.push(time);
+  if (event.recurrence) parts.push('se repite');
+  if (event.status === 'cancelled') parts.push('cancelado');
+  return parts.join(', ');
+}
+
+/** Flecha del teclado -> cuántos días mover (una semana entera con arriba/abajo). */
+const KEY_DAY_DELTA: Record<string, number> = {
+  ArrowLeft: -1,
+  ArrowRight: 1,
+  ArrowUp: -7,
+  ArrowDown: 7,
+};
 
 export function MonthView({
   cursor,
@@ -47,8 +67,9 @@ export function MonthView({
   onCreateOn,
   onMoveEvent,
   canEdit,
+  timeZone,
 }: Props) {
-  const today = new Date();
+  const today = toDisplay(new Date().toISOString(), timeZone);
   const days = monthGridDays(cursor);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dropDay, setDropDay] = useState<string | null>(null);
@@ -59,8 +80,8 @@ export function MonthView({
     key: string,
     from: Date,
   ) => {
-    // Mover una serie entera arrastrando una ocurrencia sería ambiguo: se edita en el diálogo.
-    if (e.button !== 0 || event.recurrence || !canEdit(event)) return;
+    // Arrastrar una ocurrencia de una serie crea una excepción de "solo esta ocurrencia".
+    if (e.button !== 0 || !canEdit(event)) return;
     e.preventDefault();
     const reset = () => {
       setDragKey(null);
@@ -78,7 +99,7 @@ export function MonthView({
         const dayDelta = target ? daysBetween(from, target) : 0;
         if (dayDelta === 0) return;
         const next = moveSpan(
-          { start: new Date(event.startAt), end: new Date(event.endAt) },
+          { start: toDisplay(event.startAt, timeZone), end: toDisplay(event.endAt, timeZone) },
           event.allDay,
           dayDelta,
         );
@@ -97,12 +118,12 @@ export function MonthView({
       </div>
       <div className={`month-grid ${dragKey ? 'is-dragging' : ''}`}>
         {days.map((day) => {
-          const { allDay, timed } = eventsForDay(events, day);
+          const { allDay, timed } = eventsForDay(events, day, timeZone);
           const items = [
             ...allDay.map((event) => ({ event, time: null as string | null })),
             ...timed.map(({ event }) => ({
               event,
-              time: timeFormat.format(new Date(event.startAt)),
+              time: timeFormat.format(toDisplay(event.startAt, timeZone)),
             })),
           ];
           const hidden = items.length - MAX_VISIBLE;
@@ -138,10 +159,26 @@ export function MonthView({
                       event.status === 'cancelled' ? 'is-cancelled' : ''
                     } ${dragKey === key ? 'is-dragging' : ''}`}
                     style={{ '--event-color': colorOf(event) } as CSSProperties}
+                    aria-label={describeChip(event, time)}
                     onPointerDown={(e) => beginDrag(e, event, key, day)}
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelectEvent(event);
+                    }}
+                    onKeyDown={(e) => {
+                      const delta = KEY_DAY_DELTA[e.key];
+                      if (delta === undefined || !canEdit(event)) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const next = moveSpan(
+                        {
+                          start: toDisplay(event.startAt, timeZone),
+                          end: toDisplay(event.endAt, timeZone),
+                        },
+                        event.allDay,
+                        delta,
+                      );
+                      onMoveEvent(event, next.start, next.end);
                     }}
                   >
                     {time && <span className="chip-time">{time}</span>}

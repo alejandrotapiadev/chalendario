@@ -7,7 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import type { EventDto } from '@calendar/shared';
-import { LOCALE, isSameDay, startOfDay } from '../calendar/dates.ts';
+import { LOCALE, isSameDay, startOfDay, toDisplay } from '../calendar/dates.ts';
 import { moveSpan, resizeSpan, sameSpan, snapMinutes, type Span } from '../calendar/drag.ts';
 import { eventsForDay, layoutSegments } from '../calendar/layout.ts';
 import { startDrag } from '../calendar/pointerDrag.ts';
@@ -22,6 +22,17 @@ const timeFormat = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2
 const pxPerMinute = HOUR_PX / 60;
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
+/** Nombre accesible de un evento: más completo que el texto visible (hora, repetición…). */
+function describeEvent(event: EventDto, start: Date, end: Date): string {
+  const parts = [
+    event.title,
+    event.allDay ? 'todo el día' : `${timeFormat.format(start)} a ${timeFormat.format(end)}`,
+  ];
+  if (event.recurrence) parts.push('se repite');
+  if (event.status === 'cancelled') parts.push('cancelado');
+  return parts.join(', ');
+}
+
 interface Props {
   days: Date[];
   events: EventDto[];
@@ -34,6 +45,8 @@ interface Props {
   onMoveEvent: (event: EventDto, start: Date, end: Date) => void;
   /** ¿Se puede modificar el evento? Si no, tampoco se arrastra ni se redimensiona. */
   canEdit: (event: EventDto) => boolean;
+  /** Zona horaria en la que se pinta y se arrastra/redimensiona (T-10). */
+  timeZone: string;
 }
 
 interface DragState {
@@ -54,10 +67,11 @@ export function TimeGridView({
   onCreateAt,
   onMoveEvent,
   canEdit,
+  timeZone,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
-  const now = new Date();
+  const now = toDisplay(new Date().toISOString(), timeZone);
 
   // Al abrir la vista, dejar visible la mañana en vez de la medianoche.
   useEffect(() => {
@@ -65,7 +79,7 @@ export function TimeGridView({
     scroller.current?.scrollTo({ top: 7 * HOUR_PX - 16 });
   }, []);
 
-  const perDay = days.map((day) => ({ day, ...eventsForDay(events, day) }));
+  const perDay = days.map((day) => ({ day, ...eventsForDay(events, day, timeZone) }));
 
   const createFromClick = (day: Date, e: MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -80,7 +94,10 @@ export function TimeGridView({
     event: EventDto,
     state: Pick<DragState, 'mode' | 'dayDelta' | 'minuteDelta'>,
   ) => {
-    const original: Span = { start: new Date(event.startAt), end: new Date(event.endAt) };
+    const original: Span = {
+      start: toDisplay(event.startAt, timeZone),
+      end: toDisplay(event.endAt, timeZone),
+    };
     return state.mode === 'move'
       ? moveSpan(original, event.allDay, state.dayDelta, state.minuteDelta)
       : resizeSpan(original, state.minuteDelta);
@@ -93,8 +110,9 @@ export function TimeGridView({
     dayIndex: number,
     mode: DragState['mode'],
   ) => {
-    // Mover una serie entera arrastrando una ocurrencia sería ambiguo: se edita en el diálogo.
-    if (e.button !== 0 || event.recurrence || !canEdit(event)) return;
+    // Arrastrar o redimensionar una ocurrencia de una serie crea una excepción de "solo
+    // esta ocurrencia".
+    if (e.button !== 0 || !canEdit(event)) return;
     e.preventDefault(); // evita seleccionar texto mientras se arrastra
     e.stopPropagation();
     const colWidth = e.currentTarget.closest<HTMLElement>('.tg-col')!.offsetWidth;
@@ -113,7 +131,12 @@ export function TimeGridView({
       onEnd: (dx, dy) => {
         setDrag(null);
         const next = spanFor(event, measure(dx, dy));
-        if (!sameSpan(next, { start: new Date(event.startAt), end: new Date(event.endAt) })) {
+        if (
+          !sameSpan(next, {
+            start: toDisplay(event.startAt, timeZone),
+            end: toDisplay(event.endAt, timeZone),
+          })
+        ) {
           onMoveEvent(event, next.start, next.end);
         }
       },
@@ -148,6 +171,11 @@ export function TimeGridView({
                   type="button"
                   className={`chip chip-solid ${event.status === 'cancelled' ? 'is-cancelled' : ''}`}
                   style={{ '--event-color': colorOf(event) } as CSSProperties}
+                  aria-label={describeEvent(
+                    event,
+                    toDisplay(event.startAt, timeZone),
+                    toDisplay(event.endAt, timeZone),
+                  )}
                   onClick={() => onSelectEvent(event)}
                 >
                   <span className="chip-title">{event.title}</span>
@@ -205,8 +233,8 @@ export function TimeGridView({
                   MIN_EVENT_PX,
                 );
               }
-              const first = shown?.start ?? new Date(event.startAt);
-              const last = shown?.end ?? new Date(event.endAt);
+              const first = shown?.start ?? toDisplay(event.startAt, timeZone);
+              const last = shown?.end ?? toDisplay(event.endAt, timeZone);
 
               return (
                 <button
@@ -216,10 +244,38 @@ export function TimeGridView({
                     dragging ? 'is-dragging' : ''
                   }`}
                   style={style}
+                  aria-label={describeEvent(event, first, last)}
                   onPointerDown={(e) => beginDrag(e, event, key, dayIndex, 'move')}
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelectEvent(event);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!canEdit(event)) return;
+                    let dayDelta = 0;
+                    let minuteDelta = 0;
+                    if (e.key === 'ArrowLeft') dayDelta = -1;
+                    else if (e.key === 'ArrowRight') dayDelta = 1;
+                    else if (e.key === 'ArrowUp') minuteDelta = -15;
+                    else if (e.key === 'ArrowDown') minuteDelta = 15;
+                    else return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // Left/Right solo mueve dentro de los días visibles (como al arrastrar).
+                    const clampedIndex = clamp(dayIndex + dayDelta, 0, days.length - 1);
+                    const next = spanFor(event, {
+                      mode: 'move',
+                      dayDelta: clampedIndex - dayIndex,
+                      minuteDelta,
+                    });
+                    if (
+                      !sameSpan(next, {
+                        start: toDisplay(event.startAt, timeZone),
+                        end: toDisplay(event.endAt, timeZone),
+                      })
+                    ) {
+                      onMoveEvent(event, next.start, next.end);
+                    }
                   }}
                 >
                   <span className="tg-event-title">
@@ -231,7 +287,7 @@ export function TimeGridView({
                       {timeFormat.format(first)} – {timeFormat.format(last)}
                     </span>
                   )}
-                  {!event.recurrence && canEdit(event) && (
+                  {canEdit(event) && (
                     <span
                       className="tg-resize"
                       aria-hidden="true"

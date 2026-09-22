@@ -2,30 +2,53 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   CalendarDto,
   CategoryDto,
+  CreateEventInput,
+  EditScope,
   EventDto,
   InvitationDto,
   ReminderDto,
+  UpdateEventInput,
   UserDto,
 } from '@calendar/shared';
 import { ApiError, api, setConnectionHandler, type ConnectionState } from './api.ts';
 import {
   browserTimezone,
+  fromDisplay,
   shiftCursor,
   startOfDay,
+  toDisplay,
   visibleRange,
   weekDays,
   type ViewMode,
 } from './calendar/dates.ts';
+import { isTimezone } from './calendar/zoned.ts';
 import { EventDialog, type ChangeInfo, type DialogTarget } from './components/EventDialog.tsx';
+import {
+  discardConflict,
+  drainQueue,
+  enqueueCreate,
+  enqueueDelete,
+  enqueueUpdate,
+  listConflicts,
+  listOps,
+  overlayEvents,
+  retryConflict,
+  OfflineUnsupportedError,
+  type ConflictEntry,
+  type QueueOp,
+} from './offline/queue.ts';
+import { SyncPanel } from './components/SyncPanel.tsx';
 import { MonthView } from './components/MonthView.tsx';
 import { TimeGridView } from './components/TimeGridView.tsx';
 import { RemindersMenu } from './components/RemindersMenu.tsx';
 import { SearchBox } from './components/SearchBox.tsx';
 import { CalendarSettings } from './components/CalendarSettings.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
+import { SessionsPanel } from './components/SessionsPanel.tsx';
 import { SubscribeDialog } from './components/SubscribeDialog.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
-import { loadStringSet, saveStringSet } from './storage.ts';
+import { TrashPanel } from './components/TrashPanel.tsx';
+import { loadString, loadStringSet, saveString, saveStringSet } from './storage.ts';
 import { useReminders } from './useReminders.ts';
 import { whenLabel } from './calendar/reminders.ts';
 
@@ -41,6 +64,23 @@ interface Toast {
 /** Mensaje y acción de deshacer para cada tipo de cambio. Deshacer = restaurar (ADR-002). */
 function toastFor(change: ChangeInfo): Omit<Toast, 'id'> | null {
   const { event } = change;
+  // "Solo esta ocurrencia" o "esta y las siguientes" pueden tocar más de un evento a la
+  // vez (crear una excepción, o partir una serie en dos): no se ofrece deshacer para ellas.
+  if ('scope' in change && change.scope) {
+    return { message: change.kind === 'deleted' ? 'Evento eliminado' : 'Evento actualizado' };
+  }
+  // Un evento aún en la cola de escritura sin conexión (T-13) no tiene id real: nada que
+  // deshacer (borrarlo o restaurarlo en el servidor no tiene sentido todavía).
+  if (event.id.startsWith('offline:')) {
+    return {
+      message:
+        change.kind === 'created'
+          ? 'Evento creado (pendiente de sincronizar)'
+          : change.kind === 'deleted'
+            ? 'Evento eliminado'
+            : 'Evento actualizado (pendiente de sincronizar)',
+    };
+  }
   switch (change.kind) {
     case 'created':
       return { message: 'Evento creado', undo: () => api.deleteEvent(event.id) };
@@ -68,9 +108,9 @@ function toastFor(change: ChangeInfo): Omit<Toast, 'id'> | null {
   }
 }
 
-/** Primera hora en punto a partir de ahora: hueco por defecto para un evento nuevo. */
-function nextFullHour(): Date {
-  const d = new Date();
+/** Primera hora en punto a partir de ahora (en `timeZone`): hueco por defecto de un evento nuevo. */
+function nextFullHour(timeZone: string): Date {
+  const d = toDisplay(new Date().toISOString(), timeZone);
   d.setHours(d.getHours() + 1, 0, 0, 0);
   return d;
 }
@@ -82,7 +122,14 @@ interface AppProps {
 
 export function App({ user, onLogout }: AppProps) {
   const [view, setView] = useState<ViewMode>('month');
-  const [cursor, setCursor] = useState(() => new Date());
+  // Zona horaria en la que se pintan y se arrastran las vistas (T-10); por defecto, la del
+  // navegador. `cursor` y los eventos que se ven dependen de ella, así que se necesita antes.
+  const displayTimezoneKey = `displayTimezone:${user.id}`;
+  const [displayTimezone, setDisplayTimezoneState] = useState(() => {
+    const saved = loadString(displayTimezoneKey);
+    return saved && isTimezone(saved) ? saved : browserTimezone();
+  });
+  const [cursor, setCursor] = useState(() => toDisplay(new Date().toISOString(), displayTimezone));
   const [calendars, setCalendars] = useState<CalendarDto[]>([]);
   const [events, setEvents] = useState<EventDto[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -99,12 +146,24 @@ export function App({ user, onLogout }: AppProps) {
   );
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [subscribing, setSubscribing] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [connection, setConnection] = useState<ConnectionState>('live');
   const [invitations, setInvitations] = useState<InvitationDto[]>([]);
+  // Cola de escritura sin conexión (T-13): eventos creados/editados/borrados sin red,
+  // pendientes de enviar, y lo que no se pudo aplicar al reconectar (conflicto real).
+  const [queuedOps, setQueuedOps] = useState<QueueOp[]>(() => listOps(user.id));
+  const [syncConflicts, setSyncConflicts] = useState<ConflictEntry[]>(() => listConflicts(user.id));
+  const [syncOpen, setSyncOpen] = useState(false);
+  const refreshQueue = () => {
+    setQueuedOps(listOps(user.id));
+    setSyncConflicts(listConflicts(user.id));
+  };
 
+  // `range` está en la zona de visualización; se convierte a instantes reales para la API.
   const range = visibleRange(view, cursor);
-  const from = range.from.getTime();
-  const to = range.to.getTime();
+  const from = fromDisplay(range.from, displayTimezone).getTime();
+  const to = fromDisplay(range.to, displayTimezone).getTime();
 
   useEffect(() => {
     api
@@ -142,18 +201,36 @@ export function App({ user, onLogout }: AppProps) {
 
   const showToast = (next: Omit<Toast, 'id'>) => setToast({ id: Date.now(), ...next });
 
-  // Avisa cuando lo que se ve viene de lo guardado (sin conexión) y recarga al volver la red.
+  /** Envía lo que haya en la cola de escritura sin conexión (T-13); no hace nada si está vacía. */
+  const syncQueue = async () => {
+    if (listOps(user.id).length === 0) return;
+    const { synced, conflicts } = await drainQueue(user.id);
+    refreshQueue();
+    if (synced > 0) setReloadKey((k) => k + 1);
+    // Los conflictos ya quedan avisados en el banner persistente (hasta que se revisen);
+    // un aviso aparte solo para lo que sí se sincronizó bien, para no duplicar el mensaje.
+    if (synced > 0 && conflicts.length === 0) {
+      showToast({ message: `${synced} cambio(s) sin conexión sincronizados` });
+    }
+  };
+
+  // Avisa cuando lo que se ve viene de lo guardado (sin conexión), recarga al volver la red y
+  // envía lo que se haya escrito sin conexión (T-13).
   useEffect(() => {
     setConnectionHandler(setConnection);
     const goOffline = () => setConnection('offline');
-    const goOnline = () => setReloadKey((k) => k + 1);
+    const goOnline = () => void syncQueue();
     window.addEventListener('offline', goOffline);
     window.addEventListener('online', goOnline);
+    // Al entrar, si hay conexión, envía lo que se hubiera quedado pendiente la vez anterior.
+    const initialSync = setTimeout(goOnline, 0);
     return () => {
       setConnectionHandler(null);
       window.removeEventListener('offline', goOffline);
       window.removeEventListener('online', goOnline);
+      clearTimeout(initialSync);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- user.id es constante (Root remonta con `key={user.id}`)
   }, []);
 
   const reloadCalendars = useCallback(
@@ -212,7 +289,7 @@ export function App({ user, onLogout }: AppProps) {
   // Solo lectura: calendarios compartidos como lector y calendarios que refleja una URL.
   const calendarById = useMemo(() => new Map(calendars.map((c) => [c.id, c])), [calendars]);
   const writableCalendars = useMemo(
-    () => calendars.filter((c) => c.role !== 'viewer' && !c.subscription),
+    () => calendars.filter((c) => c.role !== 'viewer' && !c.subscription && !c.archived),
     [calendars],
   );
   const readOnlyReasonFor = (event: EventDto): string | undefined => {
@@ -282,31 +359,103 @@ export function App({ user, onLogout }: AppProps) {
   );
 
   /**
+   * Crear, editar y borrar un evento (T-13): si la API no responde por falta de red, se deja
+   * en la cola de escritura sin conexión (salvo que sea una serie, que no se admite sin
+   * conexión: ver offline/queue.ts) y se devuelve el contenido optimista, como si hubiera ido
+   * bien. `run()` en EventDialog no distingue los dos casos.
+   */
+  const submitCreateEvent = async (input: CreateEventInput): Promise<EventDto> => {
+    try {
+      return await api.createEvent(input);
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      const op = enqueueCreate(user.id, input);
+      refreshQueue();
+      return op.display;
+    }
+  };
+
+  const submitUpdateEvent = async (
+    current: EventDto,
+    input: UpdateEventInput,
+  ): Promise<EventDto> => {
+    try {
+      return await api.updateEvent(current.id, input);
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      const op = enqueueUpdate(user.id, current, input);
+      refreshQueue();
+      return op.display;
+    }
+  };
+
+  const submitDeleteEvent = async (
+    current: EventDto,
+    scope?: { scope: EditScope; occurrenceStart: string },
+  ): Promise<void> => {
+    try {
+      await api.deleteEvent(current.id, scope);
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      enqueueDelete(user.id, current, scope);
+      refreshQueue();
+    }
+  };
+
+  /**
    * Arrastrar o redimensionar un evento. Se actualiza la pantalla al instante y, si el
    * servidor lo rechaza (p. ej. conflicto de versión), se recarga el estado real.
    */
   const moveEvent = async (event: EventDto, start: Date, end: Date) => {
-    const startAt = start.toISOString();
-    const endAt = end.toISOString();
-    setEvents((list) => list.map((e) => (e.id === event.id ? { ...e, startAt, endAt } : e)));
+    // `start`/`end` vienen de la cuadrícula, en la zona de visualización: hay que pasarlos
+    // a instantes reales antes de guardarlos o de mandarlos a la API.
+    const startAt = fromDisplay(start, displayTimezone).toISOString();
+    const endAt = fromDisplay(end, displayTimezone).toISOString();
+    // Varias ocurrencias de una misma serie comparten `id`: solo se mueve la que tenía
+    // exactamente este inicio, no todas las de la serie.
+    setEvents((list) =>
+      list.map((e) =>
+        e.id === event.id && e.startAt === event.startAt ? { ...e, startAt, endAt } : e,
+      ),
+    );
+    // La primera vez que se arrastra una ocurrencia viva de una serie, se crea una
+    // excepción de "solo esta ocurrencia"; a partir de ahí ya es un evento suelto normal.
+    const isSeriesOccurrence = event.recurrence != null;
+    const input: UpdateEventInput = {
+      startAt,
+      endAt,
+      // Los de todo el día se alinean a medianoche en la zona de visualización.
+      ...(event.allDay && { timezone: displayTimezone }),
+      ...(isSeriesOccurrence
+        ? { scope: 'this', occurrenceStart: event.startAt }
+        : { expectedVersion: event.version }),
+    };
     try {
-      const updated = await api.updateEvent(event.id, {
-        startAt,
-        endAt,
-        // Los de todo el día se alinean a medianoche en la zona del navegador.
-        ...(event.allDay && { timezone: browserTimezone() }),
-        expectedVersion: event.version,
+      const updated = await submitUpdateEvent(event, input);
+      handleChanged({
+        kind: 'updated',
+        event: updated,
+        previousVersion: event.version,
+        ...(isSeriesOccurrence && { scope: 'this' as const }),
       });
-      handleChanged({ kind: 'updated', event: updated, previousVersion: event.version });
     } catch (err) {
       setReloadKey((k) => k + 1);
       showToast({
         message:
           err instanceof ApiError
             ? `No se pudo mover: ${err.userMessage.split('\n')[0]}`
-            : 'No se pudo mover el evento',
+            : err instanceof OfflineUnsupportedError
+              ? err.message
+              : 'No se pudo mover el evento',
       });
     }
+  };
+
+  const changeDisplayTimezone = (timeZone: string) => {
+    setDisplayTimezoneState(timeZone);
+    saveString(displayTimezoneKey, timeZone);
+    // El instante real que cubre la vista cambia con la zona: hay que volver a pedir los eventos.
+    setReloadKey((k) => k + 1);
   };
 
   const toggleCalendar = (id: string) => {
@@ -340,15 +489,25 @@ export function App({ user, onLogout }: AppProps) {
     );
   };
 
-  // Los eventos sin categoría siempre se ven: los filtros solo ocultan lo que se marca.
+  const archiveCategory = async (id: string, archived: boolean) => {
+    const updated = await api.updateCategory(id, { archived });
+    setCategories((list) => list.map((c) => (c.id === id ? updated : c)));
+  };
+
+  // Los eventos sin categoría siempre se ven: los filtros solo ocultan lo que se marca. Antes
+  // de filtrar, se superponen los pendientes de la cola sin conexión (T-13): los ya
+  // enviados se ocultan de la respuesta del servidor y se muestra la versión optimista.
   const visibleEvents = useMemo(
     () =>
-      events.filter(
+      overlayEvents(user.id, events).filter(
         (e) =>
           !hiddenCalendars.has(e.calendarId) &&
           !(e.categoryId && hiddenCategories.has(e.categoryId)),
       ),
-    [events, hiddenCalendars, hiddenCategories],
+    // `queuedOps` no se lee aquí directamente: `overlayEvents` lee la cola (localStorage) al
+    // vuelo, pero solo hace falta recalcular cuando `queuedOps` avisa de que cambió.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, hiddenCalendars, hiddenCategories, queuedOps, user.id],
   );
 
   /** Abre el diálogo y retira el aviso anterior, que quedaría oculto tras él. */
@@ -363,7 +522,13 @@ export function App({ user, onLogout }: AppProps) {
    */
   const openEvent = async (event: EventDto) => {
     try {
-      openDialog({ kind: 'edit', event: event.recurrence ? await api.getEvent(event.id) : event });
+      openDialog({
+        kind: 'edit',
+        event: event.recurrence ? await api.getEvent(event.id) : event,
+        // La ocurrencia concreta pulsada: permite luego elegir "solo esta" / "esta y las
+        // siguientes" al guardar o borrar.
+        occurrenceStart: event.recurrence ? new Date(event.startAt) : undefined,
+      });
     } catch {
       showToast({ message: 'No se pudo abrir el evento' });
     }
@@ -378,6 +543,8 @@ export function App({ user, onLogout }: AppProps) {
   };
 
   const openCreate = (start: Date, allDay = false) => {
+    // Los calendarios tardan un instante en llegar al entrar: sin uno no hay dónde crear.
+    if (calendars.length === 0) return;
     const day = startOfDay(start);
     openDialog({
       kind: 'create',
@@ -400,17 +567,23 @@ export function App({ user, onLogout }: AppProps) {
         onViewChange={setView}
         onPrev={() => setCursor(shiftCursor(view, cursor, -1))}
         onNext={() => setCursor(shiftCursor(view, cursor, 1))}
-        onToday={() => setCursor(new Date())}
-        onCreate={() => openCreate(nextFullHour())}
+        onToday={() => setCursor(toDisplay(new Date().toISOString(), displayTimezone))}
+        onCreate={() => openCreate(nextFullHour(displayTimezone))}
         user={user}
         onLogout={onLogout}
+        onOpenSessions={() => setSessionsOpen(true)}
         onToggleSidebar={() => setSidebarOpen((open) => !open)}
         search={
           <SearchBox
             colorOf={colorOf}
+            timeZone={displayTimezone}
             onOpen={(event) => {
-              setCursor(new Date(event.startAt));
-              openDialog({ kind: 'edit', event });
+              setCursor(toDisplay(event.startAt, displayTimezone));
+              openDialog({
+                kind: 'edit',
+                event,
+                occurrenceStart: event.recurrence ? new Date(event.startAt) : undefined,
+              });
             }}
           />
         }
@@ -426,8 +599,22 @@ export function App({ user, onLogout }: AppProps) {
       />
       {connection !== 'live' && (
         <div role="status" className="banner-offline">
-          Sin conexión: se muestran los datos guardados en este dispositivo. Los cambios no se
-          pueden guardar hasta que vuelva la conexión.
+          Sin conexión: se muestran los datos guardados en este dispositivo. Crear, editar o borrar
+          un evento suelto se guarda en este dispositivo y se envía solo al volver la conexión (no
+          vale para series).
+        </div>
+      )}
+      {queuedOps.length > 0 && (
+        <div role="status" className="banner-offline">
+          {queuedOps.length} cambio(s) pendiente(s) de sincronizar.
+        </div>
+      )}
+      {syncConflicts.length > 0 && (
+        <div role="alert" className="banner-error">
+          {syncConflicts.length} cambio(s) sin conexión no se pudieron sincronizar.{' '}
+          <button type="button" className="link" onClick={() => setSyncOpen(true)}>
+            Revisar
+          </button>
         </div>
       )}
       {error && (
@@ -452,6 +639,10 @@ export function App({ user, onLogout }: AppProps) {
           onToggleCategory={toggleCategory}
           onCreateCategory={createCategory}
           onUpdateCategory={updateCategory}
+          onArchiveCategory={archiveCategory}
+          onOpenTrash={() => setTrashOpen(true)}
+          displayTimezone={displayTimezone}
+          onChangeDisplayTimezone={changeDisplayTimezone}
         />
         <main className="view">
           {view === 'month' && (
@@ -464,6 +655,7 @@ export function App({ user, onLogout }: AppProps) {
               onCreateOn={(day) => openCreate(day, true)}
               onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
               canEdit={canEditEvent}
+              timeZone={displayTimezone}
             />
           )}
           {view !== 'month' && (
@@ -478,6 +670,7 @@ export function App({ user, onLogout }: AppProps) {
               onCreateAt={(start) => openCreate(start)}
               onMoveEvent={(event, start, end) => void moveEvent(event, start, end)}
               canEdit={canEditEvent}
+              timeZone={displayTimezone}
             />
           )}
         </main>
@@ -514,6 +707,35 @@ export function App({ user, onLogout }: AppProps) {
           }}
         />
       )}
+      {trashOpen && (
+        <TrashPanel
+          calendars={calendars}
+          onClose={() => setTrashOpen(false)}
+          onRestored={(event) => {
+            setReloadKey((k) => k + 1);
+            showToast({ message: `«${event.title}» restaurado` });
+          }}
+        />
+      )}
+      {sessionsOpen && (
+        <SessionsPanel onClose={() => setSessionsOpen(false)} onLoggedOut={onLogout} />
+      )}
+      {syncOpen && (
+        <SyncPanel
+          conflicts={syncConflicts}
+          onClose={() => setSyncOpen(false)}
+          onDiscard={(id) => {
+            discardConflict(user.id, id);
+            refreshQueue();
+          }}
+          onRetry={async (id) => {
+            const ok = await retryConflict(user.id, id);
+            refreshQueue();
+            if (ok) setReloadKey((k) => k + 1);
+            return ok;
+          }}
+        />
+      )}
       {dialog && (
         <EventDialog
           // Nueva instancia (y estado de formulario) por cada evento o borrador abierto.
@@ -522,8 +744,12 @@ export function App({ user, onLogout }: AppProps) {
           calendars={writableCalendars}
           categories={categories}
           readOnlyReason={dialog.kind === 'edit' ? readOnlyReasonFor(dialog.event) : undefined}
+          defaultTimezone={displayTimezone}
           onClose={() => setDialog(null)}
           onChanged={handleChanged}
+          onCreateEvent={submitCreateEvent}
+          onUpdateEvent={submitUpdateEvent}
+          onDeleteEvent={submitDeleteEvent}
         />
       )}
     </div>

@@ -1,11 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import type { CalendarDto, CategoryDto, InvitationDto } from '@calendar/shared';
 import { ApiError } from '../api.ts';
+import { availableTimezones } from '../calendar/zoned.ts';
+
+const TIMEZONES = availableTimezones();
 
 interface Item {
   id: string;
   name: string;
   color: string;
+  archived: boolean;
 }
 
 type Value = { name: string; color: string };
@@ -81,9 +85,14 @@ interface ListProps {
   onToggle: (id: string) => void;
   onCreate: (value: Value) => Promise<unknown>;
   onUpdate: (id: string, value: Value) => Promise<unknown>;
+  onArchive: (id: string, archived: boolean) => Promise<unknown>;
 }
 
-/** Lista con casillas de visibilidad y edición en línea; sirve para calendarios y categorías. */
+/**
+ * Lista con casillas de visibilidad y edición en línea; sirve para categorías. Las
+ * archivadas (ADR-015) van aparte, solo con «Restaurar»: dejan de ofrecerse en eventos
+ * nuevos, pero los que ya las llevan las conservan.
+ */
 function EditableList({
   title,
   newLabel,
@@ -93,15 +102,18 @@ function EditableList({
   onToggle,
   onCreate,
   onUpdate,
+  onArchive,
 }: ListProps) {
   // id del elemento que se está editando, 'new' al crear uno, null si ninguno.
   const [editing, setEditing] = useState<string | 'new' | null>(null);
+  const active = items.filter((item) => !item.archived);
+  const archived = items.filter((item) => item.archived);
 
   return (
     <section className="side-section">
       <h2 className="side-title">{title}</h2>
       <ul className="side-list">
-        {items.map((item) => (
+        {active.map((item) => (
           <li key={item.id}>
             {editing === item.id ? (
               <ItemEditor
@@ -129,6 +141,15 @@ function EditableList({
                 >
                   ✎
                 </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label={`Archivar ${item.name}`}
+                  title="Archivar"
+                  onClick={() => void onArchive(item.id, true)}
+                >
+                  🗄
+                </button>
               </div>
             )}
           </li>
@@ -146,6 +167,29 @@ function EditableList({
           {newLabel}
         </button>
       )}
+      {archived.length > 0 && (
+        <>
+          <h3 className="side-subtitle muted">Archivadas</h3>
+          <ul className="side-list">
+            {archived.map((item) => (
+              <li key={item.id}>
+                <div className="side-item">
+                  <span className="side-name muted">{item.name}</span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label={`Restaurar ${item.name}`}
+                    title="Restaurar"
+                    onClick={() => void onArchive(item.id, false)}
+                  >
+                    ↺
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </section>
   );
 }
@@ -162,7 +206,11 @@ interface CalendarsProps {
 
 const ROLE_TAG = { editor: 'edita', viewer: 'lectura' } as const;
 
-/** Calendarios propios (con ajustes) y compartidos conmigo (con opción de dejar de verlos). */
+/**
+ * Calendarios propios (con ajustes) y compartidos conmigo (con opción de dejar de verlos).
+ * Los archivados (ADR-015) van en su propia sección, sin casilla de visibilidad: para
+ * restaurarlos hay que abrir sus ajustes.
+ */
 function CalendarLists({
   calendars,
   hidden,
@@ -173,8 +221,9 @@ function CalendarLists({
   onLeave,
 }: CalendarsProps) {
   const [creating, setCreating] = useState(false);
-  const owned = calendars.filter((c) => c.role === 'owner');
-  const shared = calendars.filter((c) => c.role !== 'owner');
+  const owned = calendars.filter((c) => c.role === 'owner' && !c.archived);
+  const shared = calendars.filter((c) => c.role !== 'owner' && !c.archived);
+  const archived = calendars.filter((c) => c.role === 'owner' && c.archived);
 
   const row = (calendar: CalendarDto) => (
     <li key={calendar.id}>
@@ -257,6 +306,28 @@ function CalendarLists({
           <ul className="side-list">{shared.map(row)}</ul>
         </section>
       )}
+      {archived.length > 0 && (
+        <section className="side-section">
+          <h2 className="side-title">Calendarios archivados</h2>
+          <ul className="side-list">
+            {archived.map((calendar) => (
+              <li key={calendar.id}>
+                <div className="side-item">
+                  <span className="side-name muted">{calendar.name}</span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label={`Ajustes de ${calendar.name}`}
+                    onClick={() => onOpenSettings(calendar)}
+                  >
+                    ⚙
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </>
   );
 }
@@ -318,6 +389,11 @@ interface Props {
   onToggleCategory: (id: string) => void;
   onCreateCategory: (value: Value) => Promise<unknown>;
   onUpdateCategory: (id: string, value: Value) => Promise<unknown>;
+  onArchiveCategory: (id: string, archived: boolean) => Promise<unknown>;
+  onOpenTrash: () => void;
+  /** Zona horaria en la que se pintan las vistas (T-10). */
+  displayTimezone: string;
+  onChangeDisplayTimezone: (timeZone: string) => void;
 }
 
 export function Sidebar({
@@ -336,6 +412,10 @@ export function Sidebar({
   onToggleCategory,
   onCreateCategory,
   onUpdateCategory,
+  onArchiveCategory,
+  onOpenTrash,
+  displayTimezone,
+  onChangeDisplayTimezone,
 }: Props) {
   return (
     <aside className={`sidebar ${open ? 'is-open' : ''}`} aria-label="Calendarios y categorías">
@@ -358,7 +438,26 @@ export function Sidebar({
         onToggle={onToggleCategory}
         onCreate={onCreateCategory}
         onUpdate={onUpdateCategory}
+        onArchive={onArchiveCategory}
       />
+      <section className="side-section">
+        <h2 className="side-title">Zona horaria de visualización</h2>
+        <select
+          aria-label="Zona horaria de visualización"
+          value={displayTimezone}
+          onChange={(e) => onChangeDisplayTimezone(e.target.value)}
+        >
+          {TIMEZONES.map((zone) => (
+            <option key={zone} value={zone}>
+              {zone}
+            </option>
+          ))}
+        </select>
+        <p className="muted">Cambia cómo se ven las horas en la cuadrícula, no las guardadas.</p>
+      </section>
+      <button type="button" className="link side-link" onClick={onOpenTrash}>
+        🗑 Papelera
+      </button>
     </aside>
   );
 }

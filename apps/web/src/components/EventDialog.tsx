@@ -3,18 +3,20 @@ import type {
   CalendarDto,
   CategoryDto,
   CreateEventInput,
+  EditScope,
   EventDto,
   UpdateEventInput,
 } from '@calendar/shared';
-import { describeChanges, weekdayIn, type EventSnapshot } from '@calendar/domain';
-import { ApiError, api } from '../api.ts';
 import {
-  browserTimezone,
-  fromInputs,
-  toDateInput,
-  toTimeInput,
-  weekdayIndex,
-} from '../calendar/dates.ts';
+  describeChanges,
+  recurrenceKey,
+  weekdayIn,
+  type EventSnapshot,
+  type RecurrenceRule,
+} from '@calendar/domain';
+import { ApiError, api } from '../api.ts';
+import { fromInputs, toDateInput, toTimeInput, weekdayIndex } from '../calendar/dates.ts';
+import { OfflineUnsupportedError } from '../offline/queue.ts';
 import { STATUS_LABELS, describeChange } from '../calendar/history.ts';
 import {
   availableTimezones,
@@ -43,16 +45,22 @@ export interface EventDraft {
 
 export type DialogTarget =
   | { kind: 'create'; draft: EventDraft }
-  /** `event` debe ser el evento tal como está definido (con el inicio de su primera ocurrencia). */
-  | { kind: 'edit'; event: EventDto };
+  /**
+   * `event` debe ser el evento tal como está definido (con el inicio de su primera
+   * ocurrencia). `occurrenceStart` es la ocurrencia concreta que se pulsó para abrir el
+   * diálogo (solo tiene sentido cuando `event.recurrence` no es null): permite ofrecer
+   * "solo esta ocurrencia" / "esta y las siguientes" al guardar o borrar.
+   */
+  | { kind: 'edit'; event: EventDto; occurrenceStart?: Date };
 
 /** Lo que ha pasado tras una operación con éxito; permite ofrecer «Deshacer». */
 export type ChangeInfo =
   | { kind: 'created'; event: EventDto }
-  | { kind: 'updated'; event: EventDto; previousVersion: number }
+  /** `scope` distinto de "series" no ofrece deshacer: puede haber tocado más de un evento. */
+  | { kind: 'updated'; event: EventDto; previousVersion: number; scope?: EditScope }
   | { kind: 'restored'; event: EventDto; previousVersion: number }
   /** `event` es el estado justo antes de borrar. */
-  | { kind: 'deleted'; event: EventDto };
+  | { kind: 'deleted'; event: EventDto; scope?: EditScope };
 
 const TIMEZONES = availableTimezones();
 
@@ -72,6 +80,22 @@ function snapshotOf(event: EventDto, override: UpdateEventInput = {}): EventSnap
     categoryId: override.categoryId === undefined ? event.categoryId : override.categoryId,
     deleted: false,
   };
+}
+
+/** Contenido de un evento, ya validado, listo para crear o para guardar con un alcance. */
+interface EventContent {
+  title: string;
+  description: string;
+  startAt: string;
+  endAt: string;
+  timezone: string;
+  allDay: boolean;
+  location: string;
+  status: EventDto['status'];
+  color: string | null;
+  categoryId: string | null;
+  recurrence: RecurrenceRule | null;
+  reminders: number[];
 }
 
 /** Otra persona (u otra pestaña) cambió el evento mientras se editaba. */
@@ -99,9 +123,22 @@ interface Props {
   categories: CategoryDto[];
   /** Si se indica, el evento se muestra pero no se puede modificar (y se explica por qué). */
   readOnlyReason?: string | undefined;
+  /** Zona horaria por defecto de un evento nuevo (la de visualización elegida, T-10). */
+  defaultTimezone: string;
   onClose: () => void;
   /** Se llama tras guardar, borrar o restaurar con éxito, para recargar los eventos. */
   onChanged: (change: ChangeInfo) => void;
+  /**
+   * Crear, editar y borrar (T-13): intentan la API y, si no hay red, lo dejan en la cola de
+   * escritura sin conexión en vez de fallar (salvo que sea una serie: eso no se pone en
+   * cola). El resultado ya viene resuelto (con el contenido optimista) en ambos casos.
+   */
+  onCreateEvent: (input: CreateEventInput) => Promise<EventDto>;
+  onUpdateEvent: (current: EventDto, input: UpdateEventInput) => Promise<EventDto>;
+  onDeleteEvent: (
+    current: EventDto,
+    scope?: { scope: EditScope; occurrenceStart: string },
+  ) => Promise<void>;
 }
 
 interface FormState {
@@ -121,16 +158,22 @@ interface FormState {
   status: EventDto['status'];
   repeat: RepeatForm;
   reminders: number[];
+  /** Motivo de este cambio (opcional); solo se aplica al editar, no al crear la versión 1. */
+  changeReason: string;
 }
 
-function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState {
+function initialState(
+  target: DialogTarget,
+  calendars: CalendarDto[],
+  defaultTimezone: string,
+): FormState {
   if (target.kind === 'create') {
     const { start, end, allDay } = target.draft;
     return {
       title: '',
       calendarId: calendars[0]?.id ?? '',
       categoryId: '',
-      timezone: browserTimezone(),
+      timezone: defaultTimezone,
       allDay,
       startDate: toDateInput(start),
       startTime: toTimeInput(start),
@@ -142,6 +185,7 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
       status: 'confirmed',
       repeat: { ...DEFAULT_REPEAT_FORM },
       reminders: [],
+      changeReason: '',
     };
   }
   const { event } = target;
@@ -161,6 +205,7 @@ function initialState(target: DialogTarget, calendars: CalendarDto[]): FormState
     status: event.status,
     repeat: formFromRule(event.recurrence),
     reminders: event.reminders,
+    changeReason: '',
   };
 }
 
@@ -174,17 +219,27 @@ export function EventDialog({
   calendars,
   categories,
   readOnlyReason,
+  defaultTimezone,
   onClose,
   onChanged,
+  onCreateEvent,
+  onUpdateEvent,
+  onDeleteEvent,
 }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [form, setForm] = useState(() => initialState(target, calendars));
+  const [form, setForm] = useState(() => initialState(target, calendars, defaultTimezone));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [conflict, setConflict] = useState<Conflict | null>(null);
+  const [scopeAction, setScopeAction] = useState<'save' | 'delete' | null>(null);
+  const [pendingContent, setPendingContent] = useState<EventContent | null>(null);
   const editing = target.kind === 'edit' ? target.event : null;
+  const occurrenceStart = target.kind === 'edit' ? target.occurrenceStart : undefined;
   const isSeries = editing?.recurrence != null;
+  /** Una excepción ya es su propio evento: no repite, y no puede volver a hacerlo. */
+  const isException = editing?.seriesId != null && editing?.recurrence == null;
+  const canChooseScope = isSeries && occurrenceStart !== undefined;
   const readOnly = readOnlyReason !== undefined;
 
   useEffect(() => {
@@ -209,7 +264,13 @@ export function EventDialog({
         setBusy(false);
         return;
       }
-      setError(err instanceof ApiError ? err.userMessage : 'No se pudo conectar con el servidor');
+      setError(
+        err instanceof ApiError
+          ? err.userMessage
+          : err instanceof OfflineUnsupportedError
+            ? err.message
+            : 'No se pudo conectar con el servidor',
+      );
       setBusy(false);
     }
   }
@@ -230,7 +291,7 @@ export function EventDialog({
       setError('El fin debe ser posterior al inicio');
       return;
     }
-    const content = {
+    const content: EventContent = {
       title: form.title,
       description: form.description,
       startAt: start.toISOString(),
@@ -241,36 +302,76 @@ export function EventDialog({
       status: form.status,
       color: form.color,
       categoryId: form.categoryId || null,
-      recurrence: ruleFromForm(form.repeat, weekdayIn(start, form.timezone)),
+      recurrence: ruleFromForm(form.repeat, start, form.timezone),
       reminders: form.reminders,
     };
-    if (editing) {
-      const input: UpdateEventInput = { ...content, expectedVersion: editing.version };
-      void run(
-        async () => ({
-          kind: 'updated',
-          event: await api.updateEvent(editing.id, input),
-          previousVersion: editing.version,
-        }),
-        async (err) => {
-          // 409: otra persona lo modificó. 404: lo eliminó (el servidor ya no lo considera vivo).
-          const stale =
-            err instanceof ApiError &&
-            (err.body?.error === 'version_conflict' || err.status === 404);
-          if (!stale) return false;
-          try {
-            setConflict({ latest: await api.getEvent(editing.id), mine: input });
-          } catch (fetchErr) {
-            if (!(fetchErr instanceof ApiError && fetchErr.status === 404)) return false;
-            setConflict({ latest: 'deleted', mine: input });
-          }
-          return true;
-        },
-      );
-    } else {
+    if (!editing) {
       const input: CreateEventInput = { ...content, calendarId: form.calendarId };
-      void run(async () => ({ kind: 'created', event: await api.createEvent(input) }));
+      void run(async () => ({ kind: 'created', event: await onCreateEvent(input) }));
+      return;
     }
+    // Cambiar la propia repetición siempre es de toda la serie, como en la mayoría de
+    // calendarios: no tiene sentido "repetir distinto solo esta ocurrencia".
+    if (canChooseScope && recurrenceKey(content.recurrence) === recurrenceKey(editing.recurrence)) {
+      setPendingContent(content);
+      setScopeAction('save');
+      return;
+    }
+    saveWithScope(content, 'series');
+  }
+
+  /** Guarda `content` sobre `editing` con el alcance elegido (por defecto, toda la serie). */
+  function saveWithScope(content: EventContent, scope: EditScope) {
+    if (!editing) return;
+    setScopeAction(null);
+    const base: UpdateEventInput = {
+      ...content,
+      ...(form.changeReason.trim() && { changeReason: form.changeReason.trim() }),
+    };
+    const input: UpdateEventInput =
+      scope === 'series'
+        ? { ...base, expectedVersion: editing.version }
+        : { ...base, scope, occurrenceStart: occurrenceStart!.toISOString() };
+
+    void run(
+      async () => ({
+        kind: 'updated',
+        event: await onUpdateEvent(editing, input),
+        previousVersion: editing.version,
+        ...(scope !== 'series' && { scope }),
+      }),
+      scope === 'series'
+        ? async (err) => {
+            // 409: otra persona lo modificó. 404: lo eliminó (ya no lo considera vivo).
+            const stale =
+              err instanceof ApiError &&
+              (err.body?.error === 'version_conflict' || err.status === 404);
+            if (!stale) return false;
+            try {
+              setConflict({ latest: await api.getEvent(editing.id), mine: input });
+            } catch (fetchErr) {
+              if (!(fetchErr instanceof ApiError && fetchErr.status === 404)) return false;
+              setConflict({ latest: 'deleted', mine: input });
+            }
+            return true;
+          }
+        : undefined,
+    );
+  }
+
+  /** Borra `editing` con el alcance elegido (por defecto, toda la serie). */
+  function performDelete(scope: EditScope) {
+    if (!editing) return;
+    setScopeAction(null);
+    void run(async () => {
+      if (scope === 'series') await onDeleteEvent(editing);
+      else
+        await onDeleteEvent(editing, {
+          scope,
+          occurrenceStart: occurrenceStart!.toISOString(),
+        });
+      return { kind: 'deleted', event: editing, ...(scope !== 'series' && { scope }) };
+    });
   }
 
   /** Guarda los cambios propios encima de la versión que hay ahora. */
@@ -304,11 +405,7 @@ export function EventDialog({
     categoryName: (id: string) => categories.find((c) => c.id === id)?.name,
   };
 
-  const zoneHint = localEquivalent(
-    toInstants(form)?.start ?? null,
-    form.timezone,
-    browserTimezone(),
-  );
+  const zoneHint = localEquivalent(toInstants(form)?.start ?? null, form.timezone, defaultTimezone);
   const startWeekday = weekdayIndex(fromInputs(form.startDate || toDateInput(new Date())));
 
   return (
@@ -335,8 +432,12 @@ export function EventDialog({
 
           {isSeries && editing?.recurrence && (
             <p className="notice" role="note">
-              Este evento se repite ({describeRule(editing.recurrence)}). Los cambios afectan a toda
-              la serie.
+              Este evento se repite (
+              {describeRule(
+                editing.recurrence,
+                weekdayIn(new Date(editing.startAt), editing.timezone),
+              )}
+              ). Los cambios afectan a toda la serie.
             </p>
           )}
 
@@ -429,11 +530,14 @@ export function EventDialog({
               {zoneHint && <span className="muted">{zoneHint}</span>}
             </label>
 
-            <RecurrenceFields
-              value={form.repeat}
-              onChange={(repeat) => set('repeat', repeat)}
-              startWeekday={startWeekday}
-            />
+            {!isException && (
+              <RecurrenceFields
+                value={form.repeat}
+                onChange={(repeat) => set('repeat', repeat)}
+                startWeekday={startWeekday}
+                startDate={fromInputs(form.startDate || toDateInput(new Date()))}
+              />
+            )}
 
             <ReminderFields
               value={form.reminders}
@@ -460,11 +564,14 @@ export function EventDialog({
                 <span>Categoría</span>
                 <select value={form.categoryId} onChange={(e) => set('categoryId', e.target.value)}>
                   <option value="">Sin categoría</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {categories
+                    .filter((c) => !c.archived || c.id === form.categoryId)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.archived ? ' (archivada)' : ''}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label className="field">
@@ -499,6 +606,18 @@ export function EventDialog({
                 onChange={(e) => set('description', e.target.value)}
               />
             </label>
+
+            {editing && (
+              <label className="field">
+                <span>Motivo del cambio (opcional)</span>
+                <input
+                  value={form.changeReason}
+                  onChange={(e) => set('changeReason', e.target.value)}
+                  maxLength={500}
+                  placeholder="p. ej. cambio de sala"
+                />
+              </label>
+            )}
 
             <fieldset className="field swatches">
               <legend>Color</legend>
@@ -574,6 +693,58 @@ export function EventDialog({
             </div>
           )}
 
+          {scopeAction && (
+            <div className="notice" role="alert">
+              <p>
+                {scopeAction === 'save'
+                  ? '¿Aplicar el cambio a...?'
+                  : `¿Eliminar «${editing?.title}»...?`}
+              </p>
+              <div className="side-editor-row">
+                <button
+                  type="button"
+                  className="btn btn-small btn-primary"
+                  onClick={() =>
+                    scopeAction === 'save'
+                      ? saveWithScope(pendingContent!, 'this')
+                      : performDelete('this')
+                  }
+                >
+                  Solo esta ocurrencia
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() =>
+                    scopeAction === 'save'
+                      ? saveWithScope(pendingContent!, 'following')
+                      : performDelete('following')
+                  }
+                >
+                  Esta y las siguientes
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() =>
+                    scopeAction === 'save'
+                      ? saveWithScope(pendingContent!, 'series')
+                      : performDelete('series')
+                  }
+                >
+                  Toda la serie
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  onClick={() => setScopeAction(null)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
           {error && (
             <p role="alert" className="form-error">
               {error}
@@ -587,15 +758,14 @@ export function EventDialog({
                 className="btn btn-danger"
                 disabled={busy}
                 onClick={() => {
+                  if (canChooseScope) {
+                    setScopeAction('delete');
+                    return;
+                  }
                   const what = isSeries
                     ? `«${editing.title}» y todas sus repeticiones`
                     : `«${editing.title}»`;
-                  if (window.confirm(`¿Eliminar ${what}?`)) {
-                    void run(async () => {
-                      await api.deleteEvent(editing.id);
-                      return { kind: 'deleted', event: editing };
-                    });
-                  }
+                  if (window.confirm(`¿Eliminar ${what}?`)) performDelete('series');
                 }}
               >
                 Eliminar

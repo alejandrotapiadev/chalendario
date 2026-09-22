@@ -61,25 +61,54 @@ export const createEventSchema = z.strictObject({
 });
 export type CreateEventInput = z.infer<typeof createEventSchema>;
 
-export const updateEventSchema = z.strictObject({
-  title: eventFields.title.optional(),
-  description: eventFields.description.optional(),
-  startAt: eventFields.startAt.optional(),
-  endAt: eventFields.endAt.optional(),
-  timezone: eventFields.timezone.optional(),
-  allDay: eventFields.allDay.optional(),
-  location: eventFields.location.optional(),
-  status: eventFields.status.optional(),
-  color: eventFields.color.optional(),
-  recurrence: eventFields.recurrence.optional(),
-  categoryId: eventFields.categoryId.optional(),
-  /** Sustituye el conjunto de recordatorios. No es contenido versionado: no crea versión. */
-  reminders: reminders.optional(),
-  /** Concurrencia optimista: si no coincide con la versión actual, la API responde 409. */
-  expectedVersion: z.int().positive().optional(),
-  changeReason: z.string().max(500).optional(),
-});
+/**
+ * Alcance de una edición o un borrado sobre un evento de una serie: toda la serie (por
+ * defecto), solo la ocurrencia indicada, o esa ocurrencia y las siguientes (parte la serie
+ * en dos). Con `this`/`following` hace falta `occurrenceStart`.
+ */
+export const EDIT_SCOPES = ['series', 'this', 'following'] as const;
+export type EditScope = (typeof EDIT_SCOPES)[number];
+
+const scopeFields = {
+  scope: z.enum(EDIT_SCOPES).optional(),
+  /** Inicio (ISO) de la ocurrencia original a la que se aplica `scope`. */
+  occurrenceStart: instant.optional(),
+};
+
+const requiresOccurrenceStart = (value: { scope?: EditScope; occurrenceStart?: string }) =>
+  !value.scope || value.scope === 'series' || value.occurrenceStart !== undefined;
+const OCCURRENCE_START_REQUIRED = {
+  message: 'occurrenceStart es obligatorio con scope "this" o "following"',
+  path: ['occurrenceStart'],
+};
+
+export const updateEventSchema = z
+  .strictObject({
+    title: eventFields.title.optional(),
+    description: eventFields.description.optional(),
+    startAt: eventFields.startAt.optional(),
+    endAt: eventFields.endAt.optional(),
+    timezone: eventFields.timezone.optional(),
+    allDay: eventFields.allDay.optional(),
+    location: eventFields.location.optional(),
+    status: eventFields.status.optional(),
+    color: eventFields.color.optional(),
+    recurrence: eventFields.recurrence.optional(),
+    categoryId: eventFields.categoryId.optional(),
+    /** Sustituye el conjunto de recordatorios. No es contenido versionado: no crea versión. */
+    reminders: reminders.optional(),
+    /** Concurrencia optimista: si no coincide con la versión actual, la API responde 409. */
+    expectedVersion: z.int().positive().optional(),
+    changeReason: z.string().max(500).optional(),
+    ...scopeFields,
+  })
+  .refine(requiresOccurrenceStart, OCCURRENCE_START_REQUIRED);
 export type UpdateEventInput = z.infer<typeof updateEventSchema>;
+
+export const deleteEventQuerySchema = z
+  .strictObject(scopeFields)
+  .refine(requiresOccurrenceStart, OCCURRENCE_START_REQUIRED);
+export type DeleteEventQuery = z.infer<typeof deleteEventQuerySchema>;
 
 /** Máximo rango consultable de una vez (cubre cualquier vista mes/semana/día). */
 export const MAX_RANGE_DAYS = 400;
@@ -115,8 +144,10 @@ export type SearchEventsQuery = z.infer<typeof searchEventsQuerySchema>;
 export interface EventDto {
   id: string;
   calendarId: string;
-  /** Serie recurrente a la que pertenece (excepciones de serie, fase posterior). */
+  /** Serie recurrente a la que pertenece, si este evento es una excepción de esa serie. */
   seriesId: string | null;
+  /** Instante original de la ocurrencia que esta excepción sustituye, o null si no lo es. */
+  recurrenceId: string | null;
   /** Número de la versión vigente (ver ADR-002). */
   version: number;
   title: string;

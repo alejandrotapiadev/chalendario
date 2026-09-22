@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
   createEventSchema,
+  deleteEventQuerySchema,
   listEventsQuerySchema,
   restoreEventSchema,
   searchEventsQuerySchema,
@@ -29,7 +30,7 @@ export function registerEventRoutes(app: FastifyInstance, db: Db): void {
     return listEvents(db, request.userId, query);
   });
 
-  // Ruta estática: tiene prioridad sobre `/events/:id`.
+  // Rutas estáticas: tienen prioridad sobre `/events/:id`.
   app.get('/events/search', async (request) => {
     const query = searchEventsQuerySchema.parse(request.query);
     return searchEvents(db, request.userId, query);
@@ -54,7 +55,8 @@ export function registerEventRoutes(app: FastifyInstance, db: Db): void {
 
   app.delete('/events/:id', async (request, reply) => {
     const { id } = params.parse(request.params);
-    await deleteEvent(db, request.userId, id);
+    const query = deleteEventQuerySchema.parse(request.query);
+    await deleteEvent(db, request.userId, id, query);
     return reply.code(204).send();
   });
 

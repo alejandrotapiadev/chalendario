@@ -40,11 +40,9 @@ eventos. Además la serie debe tener historial y poder restaurarse como cualquie
   historial describe el cambio («Cada semana → Cada 2 semanas»).
 - **Pro:** el dominio es puro y se prueba de forma exhaustiva (incluidos cambios de hora y
   el equivalente «saltar a la ventana» frente a enumerar desde el principio).
-- **Contra:** todavía no se puede cambiar o borrar **una sola ocurrencia** ni «esta y las
-  siguientes». Por eso la interfaz no permite arrastrar ocurrencias de una serie: sería
-  ambiguo. El camino previsto: una excepción es un evento propio con `events.series_id`
-  apuntando a la serie y la fecha original de la ocurrencia que sustituye (`recurrence_id`),
-  y la expansión omite esas fechas. `series_id` ya existe en el esquema para esto.
+- **Contra, resuelto en ADR-013:** cambiar o borrar **una sola ocurrencia** o «esta y las
+  siguientes» (y arrastrar una ocurrencia suelta) ya funciona; ver esa decisión para el
+  cómo.
 - **Contra:** la base de datos no sabe qué ocurrencias caen en un rango: para cada consulta se
   cargan las series que empezaron antes del fin de la ventana y se expanden en memoria. Es
   adecuado para un calendario personal (decenas de series); con miles habría que acotar por

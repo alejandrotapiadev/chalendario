@@ -4,6 +4,7 @@ import { describeChanges } from './history.ts';
 import {
   expandOccurrences,
   normalizeRecurrence,
+  splitRecurrenceAt,
   validateRecurrence,
   weekdayIn,
   type RecurrenceRule,
@@ -240,6 +241,49 @@ describe('fin de la serie', () => {
       '2026-09-22 10:00',
       '2026-09-23 10:00',
     ]);
+  });
+});
+
+describe('splitRecurrenceAt', () => {
+  it('con count: recalcula el count de la serie nueva y trunca la antigua con until', () => {
+    const s = series({ freq: 'daily', interval: 1, count: 5 });
+    // 3ª ocurrencia: 21 (1ª), 22 (2ª), 23 (3ª) -> 2 consumidas antes del corte.
+    const { before, after } = splitRecurrenceAt(s, madrid(2026, 9, 23, 10));
+    expect(before).toEqual({ freq: 'daily', interval: 1, until: '2026-09-22' });
+    expect(after).toEqual({ freq: 'daily', interval: 1, count: 3 });
+  });
+
+  it('con until: la serie nueva conserva el mismo until, la antigua se acorta', () => {
+    const s = series({ freq: 'daily', interval: 1, until: '2026-09-30' });
+    const { before, after } = splitRecurrenceAt(s, madrid(2026, 9, 25, 10));
+    expect(before).toEqual({ freq: 'daily', interval: 1, until: '2026-09-24' });
+    expect(after).toEqual({ freq: 'daily', interval: 1, until: '2026-09-30' });
+  });
+
+  it('sin fin: la serie nueva sigue sin fin', () => {
+    const s = series({ freq: 'weekly', interval: 2, byWeekday: [0] });
+    const { before, after } = splitRecurrenceAt(s, madrid(2026, 10, 5, 10));
+    expect(before).toEqual({ freq: 'weekly', interval: 2, byWeekday: [0], until: '2026-10-04' });
+    expect(after).toEqual({ freq: 'weekly', interval: 2, byWeekday: [0] });
+  });
+
+  it('cortar en la primera ocurrencia deja before en null (nada antes que conservar)', () => {
+    const s = series({ freq: 'daily', interval: 1, count: 5 });
+    const { before, after } = splitRecurrenceAt(s, madrid(2026, 9, 21, 10));
+    expect(before).toBeNull();
+    expect(after).toEqual({ freq: 'daily', interval: 1, count: 5 });
+  });
+
+  it('mensual saltando meses sin el día de inicio: el recuento sigue siendo correcto', () => {
+    // El 31 solo existe en enero, marzo, mayo... (abril, junio se saltan).
+    const s = series(
+      { freq: 'monthly', interval: 1 },
+      { startAt: madrid(2026, 1, 31, 10), endAt: madrid(2026, 1, 31, 11) },
+    );
+    // Ocurrencias antes de mayo: 31 ene, 31 mar (feb y abr no tienen 31) -> 2 consumidas.
+    const { before, after } = splitRecurrenceAt(s, madrid(2026, 5, 31, 10));
+    expect(before).toEqual({ freq: 'monthly', interval: 1, until: '2026-05-30' });
+    expect(after).toEqual({ freq: 'monthly', interval: 1 });
   });
 });
 

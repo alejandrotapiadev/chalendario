@@ -25,6 +25,8 @@ export interface EventRow extends ContentRow {
   uid: string | null;
   calendar_id: string;
   series_id: string | null;
+  /** Instante de la ocurrencia original que este evento sustituye, si es una excepción. */
+  recurrence_id: Date | null;
   version: number;
   created_at: Date;
   updated_at: Date;
@@ -43,7 +45,7 @@ export interface VersionRow extends ContentRow {
 // Estado actual = fila de `events` + su versión vigente. El join con `calendars` acota
 // todas las consultas a los eventos del usuario.
 const CURRENT_EVENTS = `
-  SELECT e.id, e.uid, e.calendar_id, e.series_id, e.current_version AS version,
+  SELECT e.id, e.uid, e.calendar_id, e.series_id, e.recurrence_id, e.current_version AS version,
          e.created_at, e.updated_at,
          v.title, v.description, v.start_at, v.end_at, v.timezone, v.all_day,
          v.location, v.status, v.color, v.recurrence, v.category_id, v.deleted,
@@ -78,6 +80,7 @@ export function rowToDto(row: EventRow): EventDto {
     id: row.id,
     calendarId: row.calendar_id,
     seriesId: row.series_id,
+    recurrenceId: row.recurrence_id?.toISOString() ?? null,
     version: row.version,
     title: row.title,
     description: row.description,
@@ -147,7 +150,11 @@ function extraFilters(range: RangeQuery, values: unknown[]): string {
   return parts.join(' ');
 }
 
-/** Eventos vigentes y no borrados que **no** se repiten y se solapan con [from, to). */
+/**
+ * Eventos vigentes y no borrados que **no** se repiten y se solapan con [from, to). Excluye
+ * las excepciones de una serie (`series_id` no nulo): esas solo aparecen como solapamiento
+ * de su serie (ver `occurrencesOf`), para no salir duplicadas.
+ */
 export async function listSingleInRange(
   db: Queryable,
   userId: string,
@@ -158,7 +165,7 @@ export async function listSingleInRange(
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
       WHERE ${readableBy('$1')} AND NOT v.deleted AND v.recurrence IS NULL
-        AND v.start_at < $3 AND v.end_at > $2 ${filters}
+        AND e.series_id IS NULL AND v.start_at < $3 AND v.end_at > $2 ${filters}
       ORDER BY v.start_at, v.end_at, e.id`,
     values,
   );
@@ -213,6 +220,25 @@ export async function searchCurrent(
 }
 
 /**
+ * Eventos borrados (su versión vigente tiene `deleted = true`), los más recientes primero.
+ * `e.updated_at` es de cuando se aplicó esa versión, es decir, de cuando se borraron.
+ */
+export async function listDeletedEvents(
+  db: Queryable,
+  userId: string,
+  limit = 200,
+): Promise<EventRow[]> {
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS}
+      WHERE ${readableBy('$1')} AND v.deleted
+      ORDER BY e.updated_at DESC
+      LIMIT $2`,
+    [userId, limit],
+  );
+  return rows;
+}
+
+/**
  * Eventos vivos con recordatorios que podrían tener uno activo en `at`: los que no se
  * repiten y aún no han terminado, y las series que ya han empezado o empiezan antes de `horizon`.
  */
@@ -237,12 +263,61 @@ export async function insertEvent(
   db: Queryable,
   calendarId: string,
   uid: string | null = null,
+  seriesId: string | null = null,
+  recurrenceId: Date | null = null,
 ): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
-    'INSERT INTO events (calendar_id, uid) VALUES ($1, $2) RETURNING id',
-    [calendarId, uid],
+    `INSERT INTO events (calendar_id, uid, series_id, recurrence_id)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [calendarId, uid, seriesId, recurrenceId],
   );
   return rows[0]!.id;
+}
+
+/** Excepción de esa serie para esa ocurrencia exacta, si existe (borrada o no). */
+export async function findExceptionRow(
+  db: Queryable,
+  userId: string,
+  seriesId: string,
+  recurrenceId: Date,
+): Promise<EventRow | null> {
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS}
+      WHERE ${readableBy('$1')} AND e.series_id = $2 AND e.recurrence_id = $3`,
+    [userId, seriesId, recurrenceId],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Todas las excepciones (borradas o no) de esas series. Las borradas hacen falta para saber
+ * qué fechas ya no se deben expandir de la serie original, aunque no se muestren.
+ */
+export async function listExceptionsForSeries(
+  db: Queryable,
+  userId: string,
+  seriesIds: string[],
+): Promise<EventRow[]> {
+  if (seriesIds.length === 0) return [];
+  const { rows } = await db.query<EventRow>(
+    `${CURRENT_EVENTS} WHERE ${readableBy('$1')} AND e.series_id = ANY($2)`,
+    [userId, seriesIds],
+  );
+  return rows;
+}
+
+/** Reasigna a la serie nueva las excepciones de `oldSeriesId` a partir de `fromInstant`. */
+export async function reassignExceptions(
+  db: Queryable,
+  oldSeriesId: string,
+  newSeriesId: string,
+  fromInstant: Date,
+): Promise<void> {
+  await db.query('UPDATE events SET series_id = $2 WHERE series_id = $1 AND recurrence_id >= $3', [
+    oldSeriesId,
+    newSeriesId,
+    fromInstant,
+  ]);
 }
 
 /** Evento de ese calendario con ese UID externo (borrado o no). */

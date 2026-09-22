@@ -37,8 +37,11 @@ describe.skipIf(!testDatabaseUrl)('eventos recurrentes', () => {
   const post = (payload: object) => app.inject({ method: 'POST', url: '/events', payload });
   const patch = (id: string, payload: object) =>
     app.inject({ method: 'PATCH', url: `/events/${id}`, payload });
+  const del = (id: string, query = '') =>
+    app.inject({ method: 'DELETE', url: `/events/${id}${query}` });
   const list = async (from: string, to: string, extra = ''): Promise<Occurrence[]> =>
     (await app.inject({ method: 'GET', url: `/events?from=${from}&to=${to}${extra}` })).json();
+  const get = (id: string) => app.inject({ method: 'GET', url: `/events/${id}` });
 
   it('guarda una sola fila y una sola versión, no una por ocurrencia', async () => {
     const res = await post(training());
@@ -208,6 +211,214 @@ describe.skipIf(!testDatabaseUrl)('eventos recurrentes', () => {
       const res = await patch(id, {
         startAt: '2026-09-22T08:00:00Z',
         endAt: '2026-09-22T09:00:00Z',
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('excepciones', () => {
+    // Diaria, count 5: 21, 22, 23, 24, 25 sep 2026.
+    const daily5 = () =>
+      training({ recurrence: { freq: 'daily', interval: 1, count: 5 }, title: 'Entrenamiento' });
+
+    it('scope "this" al editar crea una excepción propia; la serie no cambia', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const res = await patch(seriesId, {
+        title: 'Entreno especial',
+        scope: 'this',
+        occurrenceStart: '2026-09-23T08:00:00Z',
+      });
+      expect(res.statusCode).toBe(200);
+      const exception = res.json();
+      expect(exception.id).not.toBe(seriesId);
+      expect(exception.seriesId).toBe(seriesId);
+      expect(exception.recurrenceId).toBe('2026-09-23T08:00:00.000Z');
+      expect(exception.recurrence).toBeNull();
+
+      const occurrences = await list('2026-09-21T00:00:00Z', '2026-09-26T00:00:00Z');
+      expect(occurrences.map((o) => [o.id, o.title])).toEqual([
+        [seriesId, 'Entrenamiento'],
+        [seriesId, 'Entrenamiento'],
+        [exception.id, 'Entreno especial'],
+        [seriesId, 'Entrenamiento'],
+        [seriesId, 'Entrenamiento'],
+      ]);
+
+      // La regla que llegue en el body de un scope "this" se ignora: una excepción no repite.
+      const withRule = await patch(seriesId, {
+        scope: 'this',
+        occurrenceStart: '2026-09-24T08:00:00Z',
+        recurrence: { freq: 'daily', interval: 1 },
+      });
+      expect(withRule.json().recurrence).toBeNull();
+    });
+
+    it('scope "this" al borrar quita solo esa fecha; las demás siguen', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const res = await del(seriesId, '?scope=this&occurrenceStart=2026-09-23T08:00:00Z');
+      expect(res.statusCode).toBe(204);
+      const titles = (await list('2026-09-21T00:00:00Z', '2026-09-26T00:00:00Z')).map(
+        (o) => o.startAt,
+      );
+      expect(titles).toEqual([
+        '2026-09-21T08:00:00.000Z',
+        '2026-09-22T08:00:00.000Z',
+        '2026-09-24T08:00:00.000Z',
+        '2026-09-25T08:00:00.000Z',
+      ]);
+    });
+
+    it('una excepción ya creada se edita como un evento suelto normal, con su propio historial', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const created = (
+        await patch(seriesId, {
+          title: 'v1',
+          scope: 'this',
+          occurrenceStart: '2026-09-23T08:00:00Z',
+        })
+      ).json();
+
+      const edited = await patch(created.id, { title: 'v2' });
+      expect(edited.json()).toMatchObject({ id: created.id, version: 2, title: 'v2' });
+
+      const versions = (
+        await app.inject({ method: 'GET', url: `/events/${created.id}/versions` })
+      ).json();
+      expect(versions.map((v: { version: number; title: string }) => [v.version, v.title])).toEqual(
+        [
+          [2, 'v2'],
+          [1, 'v1'],
+        ],
+      );
+
+      const restored = await app.inject({
+        method: 'POST',
+        url: `/events/${created.id}/restore/1`,
+      });
+      expect(restored.json().title).toBe('v1');
+    });
+
+    it('scope "following" con count recalcula la serie nueva y trunca la antigua', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const res = await patch(seriesId, {
+        title: 'Nuevo horario',
+        scope: 'following',
+        occurrenceStart: '2026-09-23T08:00:00Z',
+      });
+      expect(res.statusCode).toBe(200);
+      const newSeries = res.json();
+      expect(newSeries.id).not.toBe(seriesId);
+      expect(newSeries.recurrence).toEqual({ freq: 'daily', interval: 1, count: 3 });
+      expect(newSeries.seriesId).toBeNull(); // es una serie propia, no una excepción
+
+      const oldSeries = (await get(seriesId)).json();
+      expect(oldSeries.recurrence).toEqual({ freq: 'daily', interval: 1, until: '2026-09-22' });
+
+      const titles = (await list('2026-09-21T00:00:00Z', '2026-09-26T00:00:00Z')).map(
+        (o) => o.title,
+      );
+      expect(titles).toEqual([
+        'Entrenamiento',
+        'Entrenamiento',
+        'Nuevo horario',
+        'Nuevo horario',
+        'Nuevo horario',
+      ]);
+    });
+
+    it('scope "following" con until conserva el mismo fin en la serie nueva', async () => {
+      const { id: seriesId } = (
+        await post(
+          training({
+            recurrence: { freq: 'daily', interval: 1, until: '2026-09-30' },
+            title: 'Entrenamiento',
+          }),
+        )
+      ).json();
+      const res = await patch(seriesId, {
+        scope: 'following',
+        occurrenceStart: '2026-09-25T08:00:00Z',
+      });
+      expect(res.json().recurrence).toEqual({ freq: 'daily', interval: 1, until: '2026-09-30' });
+      const oldSeries = (await get(seriesId)).json();
+      expect(oldSeries.recurrence).toEqual({ freq: 'daily', interval: 1, until: '2026-09-24' });
+    });
+
+    it('cortar "following" en la primera ocurrencia borra la serie antigua entera', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const res = await patch(seriesId, {
+        title: 'Desde el principio',
+        scope: 'following',
+        occurrenceStart: '2026-09-21T08:00:00Z',
+      });
+      expect(res.json().recurrence).toEqual({ freq: 'daily', interval: 1, count: 5 });
+      expect((await get(seriesId)).statusCode).toBe(404);
+    });
+
+    it('"following" reasigna a la serie nueva las excepciones posteriores al corte', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      await patch(seriesId, {
+        title: 'Especial',
+        scope: 'this',
+        occurrenceStart: '2026-09-23T08:00:00Z',
+      });
+
+      // Corte en la primera ocurrencia: la serie vieja desaparece del todo, así que la
+      // excepción solo sigue siendo visible si se reasignó a la serie nueva.
+      await patch(seriesId, {
+        title: 'Nueva serie',
+        scope: 'following',
+        occurrenceStart: '2026-09-21T08:00:00Z',
+      });
+
+      const titles = (await list('2026-09-21T00:00:00Z', '2026-09-26T00:00:00Z')).map(
+        (o) => o.title,
+      );
+      expect(titles).toEqual([
+        'Nueva serie',
+        'Nueva serie',
+        'Especial',
+        'Nueva serie',
+        'Nueva serie',
+      ]);
+    });
+
+    it('"following" al borrar cancela las excepciones posteriores al corte', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const exception = (
+        await patch(seriesId, {
+          title: 'Especial',
+          scope: 'this',
+          occurrenceStart: '2026-09-23T08:00:00Z',
+        })
+      ).json();
+
+      const res = await del(seriesId, '?scope=following&occurrenceStart=2026-09-23T08:00:00Z');
+      expect(res.statusCode).toBe(204);
+
+      const titles = (await list('2026-09-21T00:00:00Z', '2026-09-26T00:00:00Z')).map(
+        (o) => o.startAt,
+      );
+      expect(titles).toEqual(['2026-09-21T08:00:00.000Z', '2026-09-22T08:00:00.000Z']);
+      expect((await get(exception.id)).statusCode).toBe(404);
+    });
+
+    it('occurrenceStart que no es una ocurrencia real da 400', async () => {
+      const { id: seriesId } = (await post(daily5())).json();
+      const res = await patch(seriesId, {
+        title: 'x',
+        scope: 'this',
+        occurrenceStart: '2026-09-23T09:30:00Z',
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('scope "this"/"following" en un evento que no se repite da 400', async () => {
+      const { id } = (await post({ ...daily5(), recurrence: undefined, title: 'Suelto' })).json();
+      const res = await patch(id, {
+        title: 'x',
+        scope: 'this',
+        occurrenceStart: '2026-09-21T08:00:00Z',
       });
       expect(res.statusCode).toBe(400);
     });

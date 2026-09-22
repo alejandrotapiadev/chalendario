@@ -1,6 +1,6 @@
 # Modelo de datos
 
-> Estado: implementado hasta la fase 4 (migraciones 002–013).
+> Estado: implementado hasta la fase 4 (migraciones 002–014).
 > Regla clave (ADR-002): **cada modificación de un evento crea una nueva versión; las
 > versiones nunca se modifican.**
 
@@ -28,15 +28,15 @@ vienen de una importación o de una suscripción (ADR-010).
 events                          event_versions
 - id                            - id
 - calendar_id -> calendars      - event_id  -> events.id
-- series_id (nullable, sin FK)  - version   (1, 2, 3…; único por event_id)
-- current_version               - title, description, location
-- created_at                    - start_at / end_at (timestamptz, end > start)
-- updated_at                    - timezone (IANA), all_day
-                                - status: confirmed | tentative | cancelled
-                                - color (nulo = el de la categoría o el calendario)
-                                - category_id -> categories (nulo = sin categoría)
-                                - recurrence (jsonb; nulo = no se repite)
-                                - deleted
+- series_id -> events.id        - version   (1, 2, 3…; único por event_id)
+  (nullable; es una excepción)  - title, description, location
+- recurrence_id (timestamptz;   - start_at / end_at (timestamptz, end > start)
+  nullable; solo si hay         - timezone (IANA), all_day
+  series_id; único junto a      - status: confirmed | tentative | cancelled
+  series_id)                    - color (nulo = el de la categoría o el calendario)
+- current_version               - category_id -> categories (nulo = sin categoría)
+- created_at                    - recurrence (jsonb; nulo = no se repite)
+- updated_at                    - deleted
                                 - created_at, created_by -> users
                                 - change_reason
 ```
@@ -110,10 +110,21 @@ recurrence = { freq: 'daily' | 'weekly' | 'monthly',
 
 - `GET /events?from&to` expande las series a ocurrencias (mismo `id`, inicio y fin propios).
   `GET /events/:id` devuelve la serie tal como está definida.
-- Editar, borrar, restaurar y el historial afectan a **toda la serie**. Cambiar la regla es
-  una versión más y el historial la describe.
-- Excepciones («solo este martes»): pendiente. Se modelarán como un evento propio con
-  `events.series_id` (ya existente) y la fecha original de la ocurrencia que sustituye.
+- Editar y borrar admiten tres alcances (`scope`, ver ADR-013): `series` (todos, por
+  defecto), `this` (solo una ocurrencia) y `following` (esa ocurrencia y las siguientes).
+  Restaurar e historial no necesitan `scope`: una excepción ya creada es un evento normal,
+  con sus propios `GET /events/:id/versions` y `POST /events/:id/restore/:version`.
+- **Excepción de una sola ocurrencia** (`scope: 'this'`): un evento propio con
+  `events.series_id` → id de la serie madre (con FK) y `events.recurrence_id` (timestamptz) →
+  instante exacto de la ocurrencia original que sustituye. Única por `(series_id,
+recurrence_id)`. No tiene `recurrence` propia. La expansión de la serie (`occurrencesOf` en
+  `events.service.ts`) excluye esas fechas y añade la excepción como su propio evento.
+- **"Esta y las siguientes"** (`scope: 'following'`): no usa excepciones; parte la serie en
+  dos (`splitRecurrenceAt` en `packages/domain`). La serie original se trunca con
+  `until = día anterior`, o se borra entera si se cortaba en la primera ocurrencia. Se crea
+  una serie nueva a partir de ahí, con la misma cadencia (`count` recalculado si aplica). Las
+  excepciones ya existentes con `recurrence_id` posterior al corte se reasignan a la serie
+  nueva (o se borran, si el alcance era un borrado).
 
 ## Recordatorios
 

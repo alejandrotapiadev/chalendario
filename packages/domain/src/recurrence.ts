@@ -13,7 +13,7 @@ const MAX_CANDIDATES = 50_000;
 
 /**
  * Regla de repetición. Es un subconjunto deliberado de RRULE (RFC 5545) que se puede
- * ampliar sin migrar datos: el resto (excepciones, «segundo martes»…) llegará después.
+ * ampliar sin migrar datos.
  *
  * - `interval`: cada N días/semanas/meses.
  * - `byWeekday`: solo en `weekly`; 0 = lunes … 6 = domingo. Debe incluir el día del inicio.
@@ -48,6 +48,12 @@ const weekdayOf = (days: number) => mod(days + 3, 7);
 
 const daysInMonth = (year: number, month: number) =>
   new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+/** Fecha `YYYY-MM-DD` de un nº de día desde 1970. */
+function formatCivilDate(days: number): string {
+  const { year, month, day } = daysToCivil(days);
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
 
 /** Día (nº desde 1970) de una fecha `YYYY-MM-DD`, o null si no es una fecha válida. */
 function parseCivilDate(text: string): number | null {
@@ -286,4 +292,43 @@ export function expandOccurrences(
     }
   }
   return result;
+}
+
+export interface RecurrenceSplit {
+  /**
+   * Regla de la serie original, truncada justo antes de `at`; `null` si no queda ninguna
+   * ocurrencia antes (`at` era la primera), y por tanto la serie original no tiene sentido.
+   */
+  before: RecurrenceRule | null;
+  /** Regla de la serie nueva que sigue desde `at`: misma cadencia, `count` recalculado. */
+  after: RecurrenceRule;
+}
+
+/**
+ * Parte una serie en dos por la ocurrencia `at` («esta y las siguientes»). No comprueba que
+ * `at` sea una ocurrencia real de `series`: eso es responsabilidad de quien llama.
+ */
+export function splitRecurrenceAt(series: RecurringSeries, at: Date): RecurrenceSplit {
+  const rule = series.recurrence;
+  const consumed = expandOccurrences(
+    series,
+    { from: series.startAt, to: at },
+    MAX_OCCURRENCES_PER_EXPANSION,
+  ).length;
+
+  const atWall = wallClock(at, series.timezone);
+  const atDay = civilToDays(atWall.year, atWall.month, atWall.day);
+  const cadence = {
+    freq: rule.freq,
+    interval: rule.interval,
+    ...(rule.byWeekday && { byWeekday: rule.byWeekday }),
+  };
+
+  const before: RecurrenceRule | null =
+    consumed === 0 ? null : { ...cadence, until: formatCivilDate(atDay - 1) };
+
+  const after: RecurrenceRule =
+    rule.count === undefined ? { ...rule } : { ...cadence, count: rule.count - consumed };
+
+  return { before, after };
 }

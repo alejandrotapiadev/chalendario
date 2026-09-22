@@ -1,7 +1,7 @@
 import { expandOccurrences } from '@calendar/domain';
 import { REMINDER_MAX_MINUTES, type ReminderDto } from '@calendar/shared';
 import type { Db } from '../../db.ts';
-import { listReminderCandidates } from '../events/events.repository.ts';
+import { listExceptionsForSeries, listReminderCandidates } from '../events/events.repository.ts';
 
 const MINUTE_MS = 60_000;
 
@@ -16,8 +16,21 @@ export async function activeReminders(db: Db, userId: string, at: Date): Promise
   const horizon = new Date(at.getTime() + (REMINDER_MAX_MINUTES + 1) * MINUTE_MS);
   const rows = await listReminderCandidates(db, userId, at, horizon);
 
+  // Las excepciones de una serie ya avisan por su cuenta (son una fila más arriba, con
+  // `recurrence: null`): solo hace falta que la serie no vuelva a avisar de esa misma fecha.
+  const seriesIds = rows.filter((r) => r.recurrence).map((r) => r.id);
+  const exceptions = await listExceptionsForSeries(db, userId, seriesIds);
+  const excludedBySeries = new Map<string, Set<number>>();
+  for (const e of exceptions) {
+    const set = excludedBySeries.get(e.series_id!);
+    const time = e.recurrence_id!.getTime();
+    if (set) set.add(time);
+    else excludedBySeries.set(e.series_id!, new Set([time]));
+  }
+
   const result: ReminderDto[] = [];
   for (const row of rows) {
+    const excluded = excludedBySeries.get(row.id);
     const occurrences = row.recurrence
       ? expandOccurrences(
           {
@@ -28,7 +41,7 @@ export async function activeReminders(db: Db, userId: string, at: Date): Promise
             recurrence: row.recurrence,
           },
           { from: at, to: horizon },
-        )
+        ).filter((o) => !excluded?.has(o.startAt.getTime()))
       : [{ startAt: row.start_at, endAt: row.end_at }];
 
     for (const occurrence of occurrences) {

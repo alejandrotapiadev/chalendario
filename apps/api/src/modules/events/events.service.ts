@@ -4,11 +4,15 @@ import {
   expandOccurrences,
   hasChanges,
   newEventFields,
+  splitRecurrenceAt,
+  InvalidEventError,
   type EventFields,
   type EventPatch,
+  type RecurringSeries,
 } from '@calendar/domain';
 import type {
   CreateEventInput,
+  DeleteEventQuery,
   EventDto,
   EventVersionDto,
   ListEventsQuery,
@@ -22,12 +26,15 @@ import { isSubscribed } from '../calendars/calendars.repository.ts';
 import { categoryBelongsToUser } from '../categories/categories.repository.ts';
 import {
   findCurrent,
+  findExceptionRow,
   findVersionRow,
   insertEvent,
   insertVersion,
+  listExceptionsForSeries,
   listRecurringBefore,
   listSingleInRange,
   listVersionRows,
+  reassignExceptions,
   replaceReminders,
   rowToDto,
   rowToFields,
@@ -74,20 +81,34 @@ async function assertWritable(tx: Queryable, calendarId: string): Promise<void> 
   }
 }
 
-/** Crea el evento y su versión 1 (y opcionalmente UID y recordatorios) en la transacción dada. */
+/** Crea el evento y su versión 1 (y opcionalmente UID, serie/excepción y recordatorios). */
 export async function insertNewEvent(
   tx: Queryable,
   userId: string,
   calendarId: string,
   fields: EventFields,
-  opts: { reminders?: number[] | undefined; uid?: string | null; changeReason?: string } = {},
+  opts: {
+    reminders?: number[] | undefined;
+    uid?: string | null;
+    changeReason?: string;
+    seriesId?: string | null;
+    recurrenceId?: Date | null;
+    /** `true` cuando la v1 ya nace borrada (excepción que solo registra un borrado). */
+    deleted?: boolean;
+  } = {},
 ): Promise<string> {
-  const id = await insertEvent(tx, calendarId, opts.uid ?? null);
+  const id = await insertEvent(
+    tx,
+    calendarId,
+    opts.uid ?? null,
+    opts.seriesId ?? null,
+    opts.recurrenceId ?? null,
+  );
   await insertVersion(tx, {
     eventId: id,
     version: 1,
     fields,
-    deleted: false,
+    deleted: opts.deleted ?? false,
     createdBy: userId,
     changeReason: opts.changeReason ?? null,
   });
@@ -111,25 +132,44 @@ async function assertCategoryOwned(tx: Queryable, userId: string, categoryId?: s
 /** Sin repetidos y de menor a mayor: así se guardan y se devuelven. */
 const uniqueSorted = (minutes: number[]) => [...new Set(minutes)].sort((a, b) => a - b);
 
-/** Ocurrencias de un evento dentro de la ventana; un evento que no se repite es la única. */
-function occurrencesOf(row: EventRow, window: { from: Date; to: Date }): EventDto[] {
+/** La serie tal como la necesita el dominio (`packages/domain`), a partir de su fila. */
+function asRecurringSeries(row: EventRow): RecurringSeries {
+  return {
+    startAt: row.start_at,
+    endAt: row.end_at,
+    timezone: row.timezone,
+    allDay: row.all_day,
+    recurrence: row.recurrence!,
+  };
+}
+
+/**
+ * Ocurrencias de un evento dentro de la ventana; un evento que no se repite es la única.
+ * `exceptions` son las excepciones (borradas o no) de esta serie: sus fechas originales se
+ * excluyen de la expansión, y las vivas se añaden como su propio evento.
+ */
+function occurrencesOf(
+  row: EventRow,
+  window: { from: Date; to: Date },
+  exceptions: EventRow[],
+): EventDto[] {
   const dto = rowToDto(row);
   if (!row.recurrence) return [dto];
-  return expandOccurrences(
-    {
-      startAt: row.start_at,
-      endAt: row.end_at,
-      timezone: row.timezone,
-      allDay: row.all_day,
-      recurrence: row.recurrence,
-    },
-    window,
-  ).map((o) => ({ ...dto, startAt: o.startAt.toISOString(), endAt: o.endAt.toISOString() }));
+
+  const excluded = new Set(exceptions.map((e) => e.recurrence_id!.getTime()));
+  const expanded = expandOccurrences(asRecurringSeries(row), window)
+    .filter((o) => !excluded.has(o.startAt.getTime()))
+    .map((o) => ({ ...dto, startAt: o.startAt.toISOString(), endAt: o.endAt.toISOString() }));
+  const overlays = exceptions
+    .filter((e) => !e.deleted && e.start_at < window.to && e.end_at > window.from)
+    .map(rowToDto);
+  return [...expanded, ...overlays];
 }
 
 /**
  * Eventos que se solapan con [from, to). Los recurrentes se expanden aquí en ocurrencias
- * (mismo `id` que la serie, con el inicio y fin de cada una): no existen como filas.
+ * (mismo `id` que la serie, con el inicio y fin de cada una): no existen como filas. Las
+ * excepciones de una serie sustituyen su ocurrencia original (ver `occurrencesOf`).
  */
 export async function listEvents(
   db: Db,
@@ -146,9 +186,20 @@ export async function listEvents(
     listSingleInRange(db, userId, range),
     listRecurringBefore(db, userId, range),
   ]);
+  const exceptions = await listExceptionsForSeries(
+    db,
+    userId,
+    recurring.map((r) => r.id),
+  );
+  const exceptionsBySeries = new Map<string, EventRow[]>();
+  for (const e of exceptions) {
+    const list = exceptionsBySeries.get(e.series_id!);
+    if (list) list.push(e);
+    else exceptionsBySeries.set(e.series_id!, [e]);
+  }
 
   return [...single, ...recurring]
-    .flatMap((row) => occurrencesOf(row, range))
+    .flatMap((row) => occurrencesOf(row, range, exceptionsBySeries.get(row.id) ?? []))
     .sort(
       (a, b) =>
         a.startAt.localeCompare(b.startAt) ||
@@ -200,7 +251,15 @@ export async function updateEvent(
   id: string,
   input: UpdateEventInput,
 ): Promise<EventDto> {
-  const { expectedVersion, changeReason, reminders, ...content } = input;
+  const { scope, occurrenceStart, ...rest } = input;
+  if (scope === 'this') {
+    return updateOccurrence(db, userId, id, new Date(occurrenceStart!), rest);
+  }
+  if (scope === 'following') {
+    return splitSeriesFrom(db, userId, id, new Date(occurrenceStart!), rest);
+  }
+
+  const { expectedVersion, changeReason, reminders, ...content } = rest;
   const patch: EventPatch = {
     ...content,
     startAt: content.startAt === undefined ? undefined : new Date(content.startAt),
@@ -238,8 +297,180 @@ export async function updateEvent(
   });
 }
 
+/** Bloquea la serie y comprueba que `occurrenceStart` es de verdad una de sus ocurrencias. */
+async function lockLiveSeries(
+  tx: Queryable,
+  userId: string,
+  seriesId: string,
+  occurrenceStart: Date,
+): Promise<EventRow> {
+  const row = await lockLiveEvent(tx, userId, seriesId);
+  await assertCanEdit(tx, userId, row.calendar_id);
+  await assertWritable(tx, row.calendar_id);
+  if (!row.recurrence) throw new InvalidEventError(['scope: el evento no se repite']);
+
+  const [occurrence] = expandOccurrences(
+    asRecurringSeries(row),
+    { from: occurrenceStart, to: new Date(occurrenceStart.getTime() + 1000) },
+    1,
+  );
+  if (!occurrence || occurrence.startAt.getTime() !== occurrenceStart.getTime()) {
+    throw new InvalidEventError(['occurrenceStart: no es una ocurrencia de esta serie']);
+  }
+  return row;
+}
+
+/** Contenido de la ocurrencia tal como la define la serie, sin repetición propia. */
+function occurrenceFields(series: EventRow, occurrenceStart: Date): EventFields {
+  const duration = series.end_at.getTime() - series.start_at.getTime();
+  return {
+    ...rowToFields(series),
+    startAt: occurrenceStart,
+    endAt: new Date(occurrenceStart.getTime() + duration),
+    recurrence: null,
+  };
+}
+
+/**
+ * Edita "solo esta ocurrencia": crea (o, si ya existe, edita) la excepción de esa fecha.
+ * Una excepción nunca hereda ni admite una regla de repetición propia.
+ */
+async function updateOccurrence(
+  db: Db,
+  userId: string,
+  seriesId: string,
+  occurrenceStart: Date,
+  input: Omit<UpdateEventInput, 'scope' | 'occurrenceStart'>,
+): Promise<EventDto> {
+  const { expectedVersion, changeReason, reminders, ...content } = input;
+  // Una excepción nunca repite: se ignora cualquier regla que llegue en el body.
+  content.recurrence = undefined;
+
+  return withTransaction(db, async (tx) => {
+    const series = await lockLiveSeries(tx, userId, seriesId, occurrenceStart);
+    const existing = await findExceptionRow(tx, userId, seriesId, occurrenceStart);
+
+    if (existing) {
+      if (expectedVersion !== undefined && expectedVersion !== existing.version) {
+        throw new ConflictError(
+          'version_conflict',
+          `El evento está en la versión ${existing.version}, no en la ${expectedVersion}`,
+        );
+      }
+      const current = rowToFields(existing);
+      const patch: EventPatch = {
+        ...content,
+        startAt: content.startAt === undefined ? undefined : new Date(content.startAt),
+        endAt: content.endAt === undefined ? undefined : new Date(content.endAt),
+      };
+      const next = applyEventPatch(current, patch);
+      await assertCategoryOwned(tx, userId, next.categoryId);
+      if (reminders) await replaceReminders(tx, existing.id, uniqueSorted(reminders));
+      if (!hasChanges(current, next))
+        return rowToDto((await findCurrent(tx, userId, existing.id))!);
+      const updated = await appendVersion(
+        tx,
+        existing,
+        { fields: next, deleted: false, changeReason: changeReason ?? null },
+        userId,
+      );
+      return rowToDto(updated);
+    }
+
+    const base = occurrenceFields(series, occurrenceStart);
+    const patch: EventPatch = {
+      ...content,
+      startAt: content.startAt === undefined ? undefined : new Date(content.startAt),
+      endAt: content.endAt === undefined ? undefined : new Date(content.endAt),
+    };
+    const fields = applyEventPatch(base, patch);
+    await assertCategoryOwned(tx, userId, fields.categoryId);
+    const id = await insertNewEvent(tx, userId, series.calendar_id, fields, {
+      reminders: reminders ?? series.reminders,
+      changeReason: changeReason ?? undefined,
+      seriesId: series.id,
+      recurrenceId: occurrenceStart,
+    });
+    return rowToDto((await findCurrent(tx, userId, id))!);
+  });
+}
+
+/** "Esta y las siguientes": parte la serie en dos por `occurrenceStart`. */
+async function splitSeriesFrom(
+  db: Db,
+  userId: string,
+  seriesId: string,
+  occurrenceStart: Date,
+  input: Omit<UpdateEventInput, 'scope' | 'occurrenceStart'>,
+): Promise<EventDto> {
+  const { expectedVersion, changeReason, reminders, ...content } = input;
+
+  return withTransaction(db, async (tx) => {
+    const series = await lockLiveSeries(tx, userId, seriesId, occurrenceStart);
+    if (expectedVersion !== undefined && expectedVersion !== series.version) {
+      throw new ConflictError(
+        'version_conflict',
+        `El evento está en la versión ${series.version}, no en la ${expectedVersion}`,
+      );
+    }
+
+    const seriesFields = rowToFields(series);
+    const { before, after } = splitRecurrenceAt(asRecurringSeries(series), occurrenceStart);
+
+    if (before === null) {
+      await appendVersion(
+        tx,
+        series,
+        { fields: seriesFields, deleted: true, changeReason: 'split into a new series' },
+        userId,
+      );
+    } else {
+      await appendVersion(
+        tx,
+        series,
+        {
+          fields: { ...seriesFields, recurrence: before },
+          deleted: false,
+          changeReason: 'ends before the new series',
+        },
+        userId,
+      );
+    }
+
+    const newBase: EventFields = {
+      ...occurrenceFields(series, occurrenceStart),
+      recurrence: after,
+    };
+    const patch: EventPatch = {
+      ...content,
+      startAt: content.startAt === undefined ? undefined : new Date(content.startAt),
+      endAt: content.endAt === undefined ? undefined : new Date(content.endAt),
+    };
+    const newFields = applyEventPatch(newBase, patch);
+    await assertCategoryOwned(tx, userId, newFields.categoryId);
+    const newId = await insertNewEvent(tx, userId, series.calendar_id, newFields, {
+      reminders: reminders ?? series.reminders,
+      changeReason: changeReason ?? undefined,
+    });
+
+    await reassignExceptions(tx, series.id, newId, occurrenceStart);
+    return rowToDto((await findCurrent(tx, userId, newId))!);
+  });
+}
+
 /** Borrado lógico: añade una versión con `deleted = true`; el historial se conserva. */
-export async function deleteEvent(db: Db, userId: string, id: string): Promise<void> {
+export async function deleteEvent(
+  db: Db,
+  userId: string,
+  id: string,
+  query: DeleteEventQuery = {},
+): Promise<void> {
+  if (query.scope === 'this') {
+    return deleteOccurrence(db, userId, id, new Date(query.occurrenceStart!));
+  }
+  if (query.scope === 'following') {
+    return deleteFollowing(db, userId, id, new Date(query.occurrenceStart!));
+  }
   await withTransaction(db, async (tx) => {
     const row = await lockLiveEvent(tx, userId, id);
     await assertCanEdit(tx, userId, row.calendar_id);
@@ -250,6 +481,83 @@ export async function deleteEvent(db: Db, userId: string, id: string): Promise<v
       { fields: rowToFields(row), deleted: true, changeReason: 'deleted' },
       userId,
     );
+  });
+}
+
+/** Borra "solo esta ocurrencia": crea (si hace falta) la excepción ya marcada como borrada. */
+async function deleteOccurrence(
+  db: Db,
+  userId: string,
+  seriesId: string,
+  occurrenceStart: Date,
+): Promise<void> {
+  await withTransaction(db, async (tx) => {
+    const series = await lockLiveSeries(tx, userId, seriesId, occurrenceStart);
+    const existing = await findExceptionRow(tx, userId, seriesId, occurrenceStart);
+    if (existing) {
+      if (existing.deleted) return;
+      await appendVersion(
+        tx,
+        existing,
+        { fields: rowToFields(existing), deleted: true, changeReason: 'deleted' },
+        userId,
+      );
+      return;
+    }
+    await insertNewEvent(
+      tx,
+      userId,
+      series.calendar_id,
+      occurrenceFields(series, occurrenceStart),
+      {
+        reminders: series.reminders,
+        changeReason: 'deleted',
+        seriesId: series.id,
+        recurrenceId: occurrenceStart,
+        deleted: true,
+      },
+    );
+  });
+}
+
+/** Borra "esta y las siguientes": trunca la serie y cancela las excepciones posteriores. */
+async function deleteFollowing(
+  db: Db,
+  userId: string,
+  seriesId: string,
+  occurrenceStart: Date,
+): Promise<void> {
+  await withTransaction(db, async (tx) => {
+    const series = await lockLiveSeries(tx, userId, seriesId, occurrenceStart);
+    const { before } = splitRecurrenceAt(asRecurringSeries(series), occurrenceStart);
+    const fields = rowToFields(series);
+
+    if (before === null) {
+      await appendVersion(tx, series, { fields, deleted: true, changeReason: 'deleted' }, userId);
+    } else {
+      await appendVersion(
+        tx,
+        series,
+        {
+          fields: { ...fields, recurrence: before },
+          deleted: false,
+          changeReason: 'ends before this occurrence',
+        },
+        userId,
+      );
+    }
+
+    const trailing = await listExceptionsForSeries(tx, userId, [seriesId]);
+    for (const exception of trailing) {
+      if (!exception.deleted && exception.recurrence_id!.getTime() >= occurrenceStart.getTime()) {
+        await appendVersion(
+          tx,
+          exception,
+          { fields: rowToFields(exception), deleted: true, changeReason: 'series ended' },
+          userId,
+        );
+      }
+    }
   });
 }
 

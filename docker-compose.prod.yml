@@ -1,0 +1,63 @@
+# Composición de producción, genérica (sin un proveedor de hosting concreto todavía; ver
+# T-14/T-15 en pendientes/tareas.txt). Uso:
+#   POSTGRES_PASSWORD=... REGISTRATION_OPEN=false docker compose -f docker-compose.prod.yml up -d --build
+#
+# La API no publica su puerto al host: solo es accesible dentro de la red de Docker, a
+# través del proxy de `web` en /api/ (ver apps/web/docker/nginx.conf). Solo `web` se expone.
+#
+# OJO si se prueba en la misma máquina donde ya corre docker-compose.yml (desarrollo): por
+# defecto Compose nombra el proyecto según el directorio, así que ambos ficheros comparten
+# el mismo nombre de proyecto («personalcalendar») y, con él, el mismo volumen `pgdata` y
+# contenedor `db`. Para probar este fichero sin tocar la base de datos de desarrollo, usa
+# un nombre de proyecto aparte, p. ej.:
+#   docker compose -p personal-calendar-prod -f docker-compose.prod.yml up -d --build
+# No hay HTTPS en esta composición (nginx solo escucha en el puerto 80): las cookies
+# `Secure` (se activan solas con NODE_ENV=production) necesitan una capa de TLS delante de
+# `web` — un proxy inverso o el balanceador del proveedor de hosting que se elija (T-15).
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-calendar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?hay que definir POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-calendar}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER:-calendar} -d $${POSTGRES_DB:-calendar}']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      API_PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-calendar}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-calendar}
+      # Cerrar el registro (REGISTRATION_OPEN=false) en cuanto exista tu cuenta (ver T-15).
+      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # `web` (nginx) es el único proxy delante de la API en esta composición, y reenvía
+      # X-Forwarded-For sin tocarlo: de confianza para el límite de intentos por IP.
+      TRUST_PROXY: 'true'
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - '${WEB_PORT:-8080}:80'
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:

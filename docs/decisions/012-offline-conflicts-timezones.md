@@ -19,8 +19,8 @@ formulario interpretaba siempre las horas en la zona del navegador.
   la última respuesta guardada, marcada con `x-from-cache` para que la interfaz muestre «Sin
   conexión: se muestran los datos guardados». Se ve lo que ya se había consultado (por rangos de
   fechas). Los ficheros con hash de `/assets/` van primero desde la caché.
-- **Escribir sin conexión no está soportado**: el intento falla con un mensaje claro y el
-  formulario no se pierde.
+- **Escribir sin conexión**: crear, editar y borrar un evento suelto sí está soportado desde
+  T-13 (ver ADR-016); una serie, no.
 - **Privacidad:** esa caché es del navegador, no de la cuenta. Se vacía al **cerrar sesión (aunque
   no haya red)**, al caducar la sesión y al iniciar sesión. No se guardan `export`, `feed`,
   miembros ni avisos.
@@ -35,19 +35,32 @@ formulario interpretaba siempre las horas en la zona del navegador.
 
 ### Zona horaria por evento
 
-- El formulario tiene un campo de **zona horaria** (por defecto la del navegador) y las horas se
-  interpretan **en esa zona**; se muestra el equivalente en la del navegador. Al reabrir el evento
-  se ve la hora en la zona del evento. Las vistas (mes, semana, día) siguen dibujando en la zona del
-  navegador.
+- El formulario tiene un campo de **zona horaria** (por defecto la de visualización, ver abajo) y
+  las horas se interpretan **en esa zona**; se muestra el equivalente en la de visualización. Al
+  reabrir el evento se ve la hora en la zona del evento.
+
+### Zona horaria de visualización (T-10, añadido 2026-09-22)
+
+- Las vistas (mes, semana, día) ya no dibujan siempre en la zona del navegador: hay una **zona de
+  visualización** elegible (selector en la barra lateral; por defecto, la del navegador,
+  recordada por cuenta). Solo cambia lo que se ve y en qué zona se calculan los arrastres,
+  redimensionados y movimientos con el teclado: no toca la zona propia de ningún evento ni las
+  horas guardadas.
+- Implementación (`apps/web/src/calendar/dates.ts`): `toDisplay(instante, zona)` devuelve un
+  `Date` cuyos getters «locales» (`getHours`, `getDate`…) leen la hora de pared en `zona` en vez
+  de la del navegador — así el resto del código de la cuadrícula (que ya solo usaba esos
+  getters) no cambia. `fromDisplay` es la inversa: del resultado de arrastrar o crear, al
+  instante real que se manda a la API. Arrastrar un evento de todo el día lo alinea a medianoche
+  en la zona de **visualización** (antes, en la del navegador; con la zona de visualización por
+  defecto son la misma cosa).
 
 ## Consecuencias
 
 - **Pro:** se puede consultar el calendario sin red sin arriesgar datos de otra cuenta.
-- **Pro:** el panel de conflicto es la base para reconciliar cambios hechos sin conexión cuando se
-  añada escritura offline (cola + `expectedVersion`).
+- **Pro:** el panel de conflicto es la base que reutiliza T-13 (ADR-016) para reconciliar la
+  cola de escritura sin conexión con `expectedVersion`.
 - **Pro:** una reunión «a las 10:00 de Londres» se guarda, se repite y se exporta en la zona
   correcta.
-- **Contra:** sin conexión no se puede crear ni editar, ni se avisan los recordatorios.
-- **Contra:** no hay una «zona de visualización» elegible para las vistas (hoy solo la del
-  navegador), y arrastrar un evento de todo el día lo pasa a la zona del navegador.
+- **Contra:** sin conexión no se avisan los recordatorios, y una serie no se puede crear ni
+  tocar (ver ADR-016).
 - **Contra:** no hay fusión campo a campo: se sobrescribe o se descarta el conjunto.

@@ -4,10 +4,16 @@
 //   de /assets/ nunca cambian, así que van primero desde la caché.
 // - Datos de la API (solo lectura): primero red y, si no hay conexión o el servidor falla, la
 //   última respuesta guardada, marcada con `x-from-cache` para que la aplicación avise.
-// - Nada que no sea un GET se guarda: sin conexión no se puede escribir.
+// - Nada que no sea un GET se guarda aquí: este service worker no intercepta las escrituras
+//   (siguen su camino normal y fallan si no hay red). Crear, editar y borrar un evento suelto
+//   sin conexión sí funciona (T-13), pero se resuelve en la propia página, no aquí: ver
+//   apps/web/src/offline/queue.ts y docs/decisions/016-offline-write-queue.md.
 //
 // Privacidad: la caché de datos está por navegador, no por cuenta. Por eso la aplicación pide
-// vaciarla (mensaje `clear-api-cache`) al cerrar sesión, al caducar la sesión y al entrar.
+// vaciarla (mensaje `clear-api-cache`) al cerrar sesión, al caducar la sesión y al entrar. La
+// cola de escritura sin conexión (localStorage) es aparte y NO se vacía al cerrar sesión: son
+// cambios propios del usuario todavía sin enviar, y perderlos sería peor que el riesgo de
+// privacidad (ya va aparte por cuenta, con su propia clave).
 
 const SHELL_CACHE = 'shell-v1';
 const API_CACHE = 'api-v1';

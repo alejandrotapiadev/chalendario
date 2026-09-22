@@ -6,6 +6,7 @@ interface CalendarRow {
   id: string;
   name: string;
   color: string;
+  archived: boolean;
   created_at: Date;
   updated_at: Date;
   role: CalendarRole;
@@ -17,9 +18,9 @@ interface CalendarRow {
 }
 
 // `$1` es siempre el usuario que consulta. Incluye los calendarios propios y los compartidos
-// con él (invitación aceptada).
+// con él (invitación aceptada), archivados o no: el cliente decide qué mostrar y cuándo.
 const SELECT = `
-  SELECT c.id, c.name, c.color, c.created_at, c.updated_at, c.user_id AS owner_id,
+  SELECT c.id, c.name, c.color, c.archived, c.created_at, c.updated_at, c.user_id AS owner_id,
          CASE WHEN c.user_id = $1 THEN 'owner' ELSE m.role END AS role,
          o.name AS owner_name,
          s.url AS sub_url, s.last_synced_at, s.last_error
@@ -34,6 +35,7 @@ function toDto(row: CalendarRow): CalendarDto {
     id: row.id,
     name: row.name,
     color: row.color,
+    archived: row.archived,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     role: row.role,
@@ -86,13 +88,14 @@ export async function updateCalendar(
   db: Queryable,
   userId: string,
   id: string,
-  input: { name?: string | undefined; color?: string | undefined },
+  input: { name?: string | undefined; color?: string | undefined; archived?: boolean | undefined },
 ): Promise<CalendarDto | null> {
   const { rowCount } = await db.query(
     `UPDATE calendars
-        SET name = COALESCE($3, name), color = COALESCE($4, color), updated_at = now()
+        SET name = COALESCE($3, name), color = COALESCE($4, color),
+            archived = COALESCE($5, archived), updated_at = now()
       WHERE id = $1 AND user_id = $2`,
-    [id, userId, input.name ?? null, input.color ?? null],
+    [id, userId, input.name ?? null, input.color ?? null, input.archived ?? null],
   );
   return rowCount === 1 ? getCalendar(db, userId, id) : null;
 }
@@ -116,4 +119,13 @@ export async function isSubscribed(db: Queryable, calendarId: string): Promise<b
     [calendarId],
   );
   return rowCount === 1;
+}
+
+/** Un calendario archivado (ADR-015) no admite eventos nuevos; los que ya tenía no se tocan. */
+export async function isArchivedCalendar(db: Queryable, calendarId: string): Promise<boolean> {
+  const { rows } = await db.query<{ archived: boolean }>(
+    'SELECT archived FROM calendars WHERE id = $1',
+    [calendarId],
+  );
+  return rows[0]?.archived ?? false;
 }

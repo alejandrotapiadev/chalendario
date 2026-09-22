@@ -164,7 +164,7 @@ export async function listSingleInRange(
   const filters = extraFilters(range, values);
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE ${readableBy('$1')} AND NOT v.deleted AND v.recurrence IS NULL
+      WHERE ${readableBy('$1')} AND NOT c.archived AND NOT v.deleted AND v.recurrence IS NULL
         AND e.series_id IS NULL AND v.start_at < $3 AND v.end_at > $2 ${filters}
       ORDER BY v.start_at, v.end_at, e.id`,
     values,
@@ -185,7 +185,7 @@ export async function listRecurringBefore(
   const filters = extraFilters(range, values);
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE ${readableBy('$1')} AND NOT v.deleted AND v.recurrence IS NOT NULL
+      WHERE ${readableBy('$1')} AND NOT c.archived AND NOT v.deleted AND v.recurrence IS NOT NULL
         AND v.start_at < $2 ${filters}
       ORDER BY v.start_at, e.id`,
     values,
@@ -208,7 +208,7 @@ export async function searchCurrent(
 ): Promise<EventRow[]> {
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE ${readableBy('$1')} AND NOT v.deleted
+      WHERE ${readableBy('$1')} AND NOT c.archived AND NOT v.deleted
         AND (unaccent(v.title) ILIKE unaccent($2)
           OR unaccent(v.description) ILIKE unaccent($2)
           OR unaccent(v.location) ILIKE unaccent($2))
@@ -250,7 +250,7 @@ export async function listReminderCandidates(
 ): Promise<EventRow[]> {
   const { rows } = await db.query<EventRow>(
     `${CURRENT_EVENTS}
-      WHERE ${readableBy('$1')} AND NOT v.deleted AND v.status <> 'cancelled'
+      WHERE ${readableBy('$1')} AND NOT c.archived AND NOT v.deleted AND v.status <> 'cancelled'
         AND EXISTS (SELECT 1 FROM event_reminders r WHERE r.event_id = e.id)
         AND v.start_at <= $3
         AND (v.recurrence IS NOT NULL OR v.end_at > $2)`,

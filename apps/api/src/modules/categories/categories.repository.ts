@@ -6,17 +6,19 @@ interface CategoryRow {
   id: string;
   name: string;
   color: string;
+  archived: boolean;
   created_at: Date;
   updated_at: Date;
 }
 
-const COLUMNS = 'id, name::text AS name, color, created_at, updated_at';
+const COLUMNS = 'id, name::text AS name, color, archived, created_at, updated_at';
 
 function toDto(row: CategoryRow): CategoryDto {
   return {
     id: row.id,
     name: row.name,
     color: row.color,
+    archived: row.archived,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -53,15 +55,20 @@ export async function updateCategory(
   db: Queryable,
   userId: string,
   id: string,
-  input: { name?: string | undefined; color?: string | undefined },
+  input: {
+    name?: string | undefined;
+    color?: string | undefined;
+    archived?: boolean | undefined;
+  },
 ): Promise<CategoryDto | null> {
   try {
     const { rows } = await db.query<CategoryRow>(
       `UPDATE categories
-          SET name = COALESCE($3, name), color = COALESCE($4, color), updated_at = now()
+          SET name = COALESCE($3, name), color = COALESCE($4, color),
+              archived = COALESCE($5, archived), updated_at = now()
         WHERE id = $1 AND user_id = $2
         RETURNING ${COLUMNS}`,
-      [id, userId, input.name ?? null, input.color ?? null],
+      [id, userId, input.name ?? null, input.color ?? null, input.archived ?? null],
     );
     return rows[0] ? toDto(rows[0]) : null;
   } catch (err) {

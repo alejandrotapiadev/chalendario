@@ -82,6 +82,48 @@ function GeneralSection({ calendar, onSaved }: Pick<Props, 'calendar' | 'onSaved
 
 // ---------------------------------------------------------------------------------------
 
+/** Archivar (ADR-015): deja de ofrecerse ni de mostrarse, sin borrar nada; es reversible. */
+function ArchiveSection({
+  calendar,
+  onSaved,
+  onEventsChanged,
+}: Pick<Props, 'calendar' | 'onSaved' | 'onEventsChanged'>) {
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    setError(null);
+    if (!calendar.archived && !window.confirm(`¿Archivar «${calendar.name}»?`)) return;
+    try {
+      onSaved(await api.updateCalendar(calendar.id, { archived: !calendar.archived }));
+      // Un calendario archivado deja de aportar eventos a la vista (y al revés al restaurarlo).
+      onEventsChanged();
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }
+
+  return (
+    <section className="settings-section">
+      <h3>Archivar</h3>
+      <p className="muted">
+        {calendar.archived
+          ? 'Este calendario está archivado: no aparece en la barra lateral ni admite eventos nuevos. Sus eventos no se han tocado.'
+          : 'Deja de mostrarse y de admitir eventos nuevos, sin borrar nada. Se puede restaurar cuando quieras.'}
+      </p>
+      <button type="button" className="btn btn-small" onClick={() => void toggle()}>
+        {calendar.archived ? 'Restaurar calendario' : 'Archivar calendario'}
+      </button>
+      {error && (
+        <p role="alert" className="form-error">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+
 function SharingSection({ calendar }: { calendar: CalendarDto }) {
   const [members, setMembers] = useState<MemberDto[] | null>(null);
   const [email, setEmail] = useState('');
@@ -483,6 +525,13 @@ export function CalendarSettings(props: Props) {
         <SharingSection calendar={calendar} />
         <TransferSection calendar={calendar} onEventsChanged={props.onEventsChanged} />
         <FeedSection calendar={calendar} />
+        {calendar.role === 'owner' && (
+          <ArchiveSection
+            calendar={calendar}
+            onSaved={props.onSaved}
+            onEventsChanged={props.onEventsChanged}
+          />
+        )}
         <div className="form-actions">
           <span className="spacer" />
           <button type="button" className="btn btn-primary" onClick={onClose}>

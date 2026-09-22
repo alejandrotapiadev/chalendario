@@ -22,7 +22,7 @@ import type {
 import { withTransaction, type Db, type Queryable } from '../../db.ts';
 import { ConflictError, NotFoundError } from '../../errors.ts';
 import { assertCanEdit } from '../calendars/access.ts';
-import { isSubscribed } from '../calendars/calendars.repository.ts';
+import { isArchivedCalendar, isSubscribed } from '../calendars/calendars.repository.ts';
 import { categoryBelongsToUser } from '../categories/categories.repository.ts';
 import {
   findCurrent,
@@ -244,6 +244,9 @@ export async function createEvent(
   return withTransaction(db, async (tx) => {
     await assertCanEdit(tx, userId, calendarId);
     await assertWritable(tx, calendarId);
+    if (await isArchivedCalendar(tx, calendarId)) {
+      throw new ConflictError('calendar_archived', 'Este calendario está archivado');
+    }
     await assertCategoryOwned(tx, userId, fields.categoryId);
 
     const id = await insertNewEvent(tx, userId, calendarId, fields, { reminders });

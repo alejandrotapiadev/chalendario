@@ -13,6 +13,8 @@ export type CreateCalendarInput = z.infer<typeof createCalendarSchema>;
 export const updateCalendarSchema = z.strictObject({
   name: name.optional(),
   color: color.optional(),
+  /** Deja de ofrecerse para eventos nuevos ni de mostrarse; los eventos no se tocan. */
+  archived: z.boolean().optional(),
 });
 export type UpdateCalendarInput = z.infer<typeof updateCalendarSchema>;
 
@@ -20,6 +22,7 @@ export interface CalendarDto {
   id: string;
   name: string;
   color: string;
+  archived: boolean;
   createdAt: string;
   updatedAt: string;
   /** Papel del usuario actual en este calendario. */

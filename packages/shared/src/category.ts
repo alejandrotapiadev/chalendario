@@ -13,6 +13,8 @@ export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export const updateCategorySchema = z.strictObject({
   name: name.optional(),
   color: color.optional(),
+  /** Deja de ofrecerse en eventos nuevos; los que ya la tienen la conservan. */
+  archived: z.boolean().optional(),
 });
 export type UpdateCategoryInput = z.infer<typeof updateCategorySchema>;
 
@@ -20,6 +22,7 @@ export interface CategoryDto {
   id: string;
   name: string;
   color: string;
+  archived: boolean;
   createdAt: string;
   updatedAt: string;
 }

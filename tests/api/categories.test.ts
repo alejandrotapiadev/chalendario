@@ -87,6 +87,34 @@ describe.skipIf(!testDatabaseUrl)('categorías', () => {
     expect((await app.inject({ method: 'DELETE', url: `/categories/${id}` })).statusCode).toBe(404);
   });
 
+  it('archivar y restaurar (ADR-015): sigue listada, con el evento que ya la usaba', async () => {
+    const cat = (await createCategory({ name: 'Salud' })).json();
+    await app.inject({
+      method: 'POST',
+      url: '/events',
+      payload: event({ categoryId: cat.id }),
+    });
+
+    const archived = await app.inject({
+      method: 'PATCH',
+      url: `/categories/${cat.id}`,
+      payload: { archived: true },
+    });
+    expect(archived.json()).toMatchObject({ archived: true, name: 'Salud' });
+
+    // Sigue en la lista (con la marca) para poder resolver el nombre/color de eventos ya
+    // etiquetados y para poder restaurarla.
+    const listed = await app.inject({ method: 'GET', url: '/categories' });
+    expect(listed.json()).toContainEqual(expect.objectContaining({ id: cat.id, archived: true }));
+
+    const restored = await app.inject({
+      method: 'PATCH',
+      url: `/categories/${cat.id}`,
+      payload: { archived: false },
+    });
+    expect(restored.json().archived).toBe(false);
+  });
+
   describe('en los eventos', () => {
     it('un evento guarda su categoría y la devuelve', async () => {
       const cat = (await createCategory({ name: 'Salud' })).json();

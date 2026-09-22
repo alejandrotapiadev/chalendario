@@ -8,7 +8,9 @@ import { insertCategory, listCategories, updateCategory } from './categories.rep
 const params = z.object({ id: z.uuid() });
 
 // No hay DELETE: las versiones de los eventos son inmutables y referencian la categoría
-// (ADR-002). Se renombra o se recolorea.
+// (ADR-002). Se renombra, se recolorea o se archiva (PATCH archived: true) en vez de
+// borrarla (ADR-015); GET sigue devolviendo las archivadas para no perder su nombre/color
+// en eventos que ya las llevan.
 export function registerCategoryRoutes(app: FastifyInstance, db: Db): void {
   app.get('/categories', async (request) => listCategories(db, request.userId));
 

@@ -6,6 +6,7 @@ import type {
   CreateCategoryInput,
   UpdateCalendarInput,
   CreateEventInput,
+  EditScope,
   EventDto,
   EventVersionDto,
   FeedCreatedDto,
@@ -18,6 +19,7 @@ import type {
   MemberRole,
   LoginInput,
   RegisterInput,
+  SessionDto,
   UserDto,
   ReminderDto,
   RestoreEventInput,
@@ -106,6 +108,8 @@ export const api = {
   register: (input: RegisterInput) => request<UserDto>('POST', '/auth/register', input),
   login: (input: LoginInput) => request<UserDto>('POST', '/auth/login', input),
   logout: () => request<void>('POST', '/auth/logout'),
+  listSessions: () => request<SessionDto[]>('GET', '/auth/sessions'),
+  deleteSession: (id: string) => request<void>('DELETE', `/auth/sessions/${id}`),
   listCalendars: () => request<CalendarDto[]>('GET', '/calendars'),
   createCalendar: (input: CreateCalendarInput) => request<CalendarDto>('POST', '/calendars', input),
   updateCalendar: (id: string, input: UpdateCalendarInput) =>
@@ -148,11 +152,18 @@ export const api = {
   getEvent: (id: string) => request<EventDto>('GET', `/events/${id}`),
   searchEvents: (q: string) =>
     request<EventDto[]>('GET', `/events/search?q=${encodeURIComponent(q)}`),
+  listTrash: () => request<EventDto[]>('GET', '/events/trash'),
   activeReminders: () => request<ReminderDto[]>('GET', '/reminders/active'),
   createEvent: (input: CreateEventInput) => request<EventDto>('POST', '/events', input),
   updateEvent: (id: string, input: UpdateEventInput) =>
     request<EventDto>('PATCH', `/events/${id}`, input),
-  deleteEvent: (id: string) => request<void>('DELETE', `/events/${id}`),
+  deleteEvent: (id: string, scope?: { scope: EditScope; occurrenceStart: string }) =>
+    request<void>(
+      'DELETE',
+      scope
+        ? `/events/${id}?scope=${scope.scope}&occurrenceStart=${encodeURIComponent(scope.occurrenceStart)}`
+        : `/events/${id}`,
+    ),
   listVersions: (id: string) => request<EventVersionDto[]>('GET', `/events/${id}/versions`),
   restoreEvent: (id: string, version: number, input: RestoreEventInput = {}) =>
     request<EventDto>('POST', `/events/${id}/restore/${version}`, input),

@@ -210,6 +210,71 @@ describe('mensual', () => {
       '2027-03-21 10:00',
     ]);
   });
+
+  it('con bySetPos repite «el segundo [día]» de cada mes', () => {
+    // 8 sep 2026 es el segundo martes de septiembre.
+    const s = series(
+      { freq: 'monthly', interval: 1, bySetPos: 2 },
+      { startAt: madrid(2026, 9, 8, 9), endAt: madrid(2026, 9, 8, 10) },
+    );
+    expect(starts(s, madrid(2026, 9, 1), madrid(2027, 1, 1))).toEqual([
+      '2026-09-08 09:00',
+      '2026-10-13 09:00',
+      '2026-11-10 09:00',
+      '2026-12-08 09:00',
+    ]);
+  });
+
+  it('con bySetPos -1 repite «el último [día]» de cada mes', () => {
+    // 25 sep 2026 es el último viernes de septiembre.
+    const s = series(
+      { freq: 'monthly', interval: 1, bySetPos: -1 },
+      { startAt: madrid(2026, 9, 25, 9), endAt: madrid(2026, 9, 25, 10) },
+    );
+    expect(starts(s, madrid(2026, 9, 1), madrid(2027, 1, 1))).toEqual([
+      '2026-09-25 09:00',
+      '2026-10-30 09:00',
+      '2026-11-27 09:00',
+      '2026-12-25 09:00',
+    ]);
+  });
+});
+
+describe('anual', () => {
+  it('repite el mismo día cada N años', () => {
+    const s = series({ freq: 'yearly', interval: 1 });
+    expect(starts(s, madrid(2026, 1, 1), madrid(2030, 1, 1))).toEqual([
+      '2026-09-21 10:00',
+      '2027-09-21 10:00',
+      '2028-09-21 10:00',
+      '2029-09-21 10:00',
+    ]);
+  });
+
+  it('el 29 de febrero solo ocurre en años bisiestos', () => {
+    const s = series(
+      { freq: 'yearly', interval: 1 },
+      { startAt: madrid(2028, 2, 29, 9), endAt: madrid(2028, 2, 29, 10) },
+    );
+    expect(starts(s, madrid(2028, 1, 1), madrid(2037, 1, 1))).toEqual([
+      '2028-02-29 09:00',
+      '2032-02-29 09:00',
+      '2036-02-29 09:00',
+    ]);
+  });
+
+  it('con bySetPos repite «el último [día] de [mes]» cada año (p. ej. un festivo)', () => {
+    // 25 may 2026 es el último lunes de mayo.
+    const s = series(
+      { freq: 'yearly', interval: 1, bySetPos: -1 },
+      { startAt: madrid(2026, 5, 25, 9), endAt: madrid(2026, 5, 25, 10) },
+    );
+    expect(starts(s, madrid(2026, 1, 1), madrid(2029, 1, 1))).toEqual([
+      '2026-05-25 09:00',
+      '2027-05-31 09:00',
+      '2028-05-29 09:00',
+    ]);
+  });
 });
 
 describe('fin de la serie', () => {
@@ -384,6 +449,9 @@ describe('validateRecurrence y normalización', () => {
     expect(check({ freq: 'daily', interval: 1 })).toEqual([]);
     expect(check({ freq: 'weekly', interval: 2, byWeekday: [0, 3], count: 10 })).toEqual([]);
     expect(check({ freq: 'monthly', interval: 1, until: '2027-01-01' })).toEqual([]);
+    // 21 sep 2026 es el 3er lunes de septiembre.
+    expect(check({ freq: 'monthly', interval: 1, bySetPos: 3 })).toEqual([]);
+    expect(check({ freq: 'yearly', interval: 1, bySetPos: 3 })).toEqual([]);
   });
 
   it.each([
@@ -396,6 +464,14 @@ describe('validateRecurrence y normalización', () => {
       /excluyentes/,
     ],
     ['count 0', { freq: 'daily', interval: 1, count: 0 }, /count/],
+    ['bySetPos en diaria', { freq: 'daily', interval: 1, bySetPos: 1 }, /solo se admite/],
+    ['bySetPos fuera de rango', { freq: 'monthly', interval: 1, bySetPos: 5 }, /bySetPos/],
+    [
+      // el inicio (21 sep) es el 3er lunes, no el 2º.
+      'bySetPos que no coincide con el inicio',
+      { freq: 'monthly', interval: 1, bySetPos: 2 },
+      /no coincide/,
+    ],
     ['count enorme', { freq: 'daily', interval: 1, count: 1000 }, /count/],
     ['until con formato incorrecto', { freq: 'daily', interval: 1, until: '01/01/2027' }, /until/],
     ['until inexistente', { freq: 'daily', interval: 1, until: '2027-02-30' }, /until/],
@@ -406,7 +482,7 @@ describe('validateRecurrence y normalización', () => {
     ['byWeekday sin el día del inicio', { freq: 'weekly', interval: 1, byWeekday: [2] }, /incluir/],
     [
       'frecuencia desconocida',
-      { freq: 'yearly', interval: 1 } as unknown as RecurrenceRule,
+      { freq: 'quarterly', interval: 1 } as unknown as RecurrenceRule,
       /freq/,
     ],
   ] as [string, RecurrenceRule, RegExp][])('rechaza %s', (_name, rule, message) => {

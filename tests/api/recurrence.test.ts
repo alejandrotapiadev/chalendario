@@ -159,12 +159,74 @@ describe.skipIf(!testDatabaseUrl)('eventos recurrentes', () => {
   });
 
   it('rechaza una frecuencia desconocida y campos extra en la regla', async () => {
-    expect((await post(training({ recurrence: { freq: 'yearly', interval: 1 } }))).statusCode).toBe(
-      400,
-    );
+    expect(
+      (await post(training({ recurrence: { freq: 'quarterly', interval: 1 } }))).statusCode,
+    ).toBe(400);
     expect(
       (await post(training({ recurrence: { freq: 'daily', interval: 1, foo: 1 } }))).statusCode,
     ).toBe(400);
+  });
+
+  describe('reglas avanzadas: bySetPos y anual', () => {
+    it('bySetPos repite «el segundo [día]» de cada mes', async () => {
+      // 8 sep 2026 es el segundo martes de septiembre.
+      await post(
+        training({
+          title: 'Segundo martes',
+          startAt: '2026-09-08T08:00:00Z',
+          endAt: '2026-09-08T09:00:00Z',
+          recurrence: { freq: 'monthly', interval: 1, bySetPos: 2 },
+        }),
+      );
+      const occurrences = await list('2026-09-01T00:00:00Z', '2026-12-01T00:00:00Z');
+      // Fin del horario de verano en Madrid el 25 oct 2026: nov queda en UTC+1.
+      expect(occurrences.map((o) => o.startAt)).toEqual([
+        '2026-09-08T08:00:00.000Z',
+        '2026-10-13T08:00:00.000Z',
+        '2026-11-10T09:00:00.000Z',
+      ]);
+    });
+
+    it('bySetPos -1 repite «el último [día]» de cada mes', async () => {
+      // 25 sep 2026 es el último viernes de septiembre.
+      await post(
+        training({
+          title: 'Último viernes',
+          startAt: '2026-09-25T08:00:00Z',
+          endAt: '2026-09-25T09:00:00Z',
+          recurrence: { freq: 'monthly', interval: 1, bySetPos: -1 },
+        }),
+      );
+      const occurrences = await list('2026-09-01T00:00:00Z', '2026-12-01T00:00:00Z');
+      // Fin del horario de verano en Madrid el 25 oct 2026: oct/nov quedan en UTC+1.
+      expect(occurrences.map((o) => o.startAt)).toEqual([
+        '2026-09-25T08:00:00.000Z',
+        '2026-10-30T09:00:00.000Z',
+        '2026-11-27T09:00:00.000Z',
+      ]);
+    });
+
+    it('yearly repite el mismo día cada N años', async () => {
+      // El rango máximo consultable (MAX_RANGE_DAYS) obliga a partir la consulta por año.
+      await post(training({ title: 'Aniversario', recurrence: { freq: 'yearly', interval: 1 } }));
+      const first = await list('2026-01-01T00:00:00Z', '2027-01-01T00:00:00Z');
+      expect(first.map((o) => o.startAt)).toEqual(['2026-09-21T08:00:00.000Z']);
+      const second = await list('2027-01-01T00:00:00Z', '2028-01-01T00:00:00Z');
+      expect(second.map((o) => o.startAt)).toEqual(['2027-09-21T08:00:00.000Z']);
+    });
+
+    it('rechaza un bySetPos fuera de rango o que no coincide con el inicio', async () => {
+      const outOfRange = await post(
+        training({ recurrence: { freq: 'monthly', interval: 1, bySetPos: 5 } }),
+      );
+      expect(outOfRange.statusCode).toBe(400);
+
+      // 21 sep 2026 es el 3er lunes, no el 2º.
+      const mismatched = await post(
+        training({ recurrence: { freq: 'monthly', interval: 1, bySetPos: 2 } }),
+      );
+      expect(mismatched.statusCode).toBe(400);
+    });
   });
 
   describe('editar la serie', () => {

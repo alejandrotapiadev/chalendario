@@ -1,7 +1,11 @@
 import { isValidTimezone, wallClock, zonedTimeToInstant } from './timezone.ts';
 
-export const RECURRENCE_FREQS = ['daily', 'weekly', 'monthly'] as const;
+export const RECURRENCE_FREQS = ['daily', 'weekly', 'monthly', 'yearly'] as const;
 export type RecurrenceFreq = (typeof RECURRENCE_FREQS)[number];
+
+/** 1ª, 2ª, 3ª, 4ª o última (-1) ocurrencia de un día de la semana dentro del mes. */
+export const BY_SET_POS_VALUES = [1, 2, 3, 4, -1] as const;
+export type BySetPos = (typeof BY_SET_POS_VALUES)[number];
 
 export const RECURRENCE_LIMITS = { intervalMax: 99, countMax: 999 } as const;
 
@@ -15,17 +19,21 @@ const MAX_CANDIDATES = 50_000;
  * Regla de repetición. Es un subconjunto deliberado de RRULE (RFC 5545) que se puede
  * ampliar sin migrar datos.
  *
- * - `interval`: cada N días/semanas/meses.
+ * - `interval`: cada N días/semanas/meses/años.
  * - `byWeekday`: solo en `weekly`; 0 = lunes … 6 = domingo. Debe incluir el día del inicio.
+ * - `bySetPos`: solo en `monthly`/`yearly`; qué ocurrencia del día de la semana del inicio
+ *   dentro del mes (1ª–4ª, o -1 = última) — «el segundo martes», «el último viernes». Sin
+ *   él, `monthly`/`yearly` repiten el mismo día del mes (y, en `yearly`, el mismo mes).
  * - `until` (fecha `YYYY-MM-DD`, inclusive, en la zona del evento) y `count` (nº total de
  *   ocurrencias, contando la primera) son excluyentes; sin ninguno, no termina nunca.
- * - `monthly` repite el mismo día del mes; los meses que no lo tienen (30/31, 29 feb) se
- *   saltan, como en iCalendar.
+ * - `monthly`/`yearly` sin `bySetPos` saltan los periodos que no tienen ese día (31, 29
+ *   feb), como en iCalendar, en vez de ajustar al último día.
  */
 export interface RecurrenceRule {
   freq: RecurrenceFreq;
   interval: number;
   byWeekday?: number[];
+  bySetPos?: BySetPos;
   until?: string;
   count?: number;
 }
@@ -48,6 +56,36 @@ const weekdayOf = (days: number) => mod(days + 3, 7);
 
 const daysInMonth = (year: number, month: number) =>
   new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+const isLeapYear = (year: number) => (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+
+/** Día (nº desde 1970) de la N-ésima (o última, con -1) ocurrencia de `weekday` en el mes. */
+function nthWeekdayOfMonth(
+  year: number,
+  month: number,
+  weekday: number,
+  pos: number,
+): number | null {
+  const daysInM = daysInMonth(year, month);
+  if (pos > 0) {
+    const firstWeekday = weekdayOf(civilToDays(year, month, 1));
+    const day = 1 + mod(weekday - firstWeekday, 7) + (pos - 1) * 7;
+    return day <= daysInM ? civilToDays(year, month, day) : null;
+  }
+  const lastWeekday = weekdayOf(civilToDays(year, month, daysInM));
+  return civilToDays(year, month, daysInM - mod(lastWeekday - weekday, 7));
+}
+
+/** Qué ocurrencia (1ª, 2ª…) de su día de la semana es `day` dentro de su mes. */
+function ordinalOfWeekdayInMonth(day: number): number {
+  return Math.floor((daysToCivil(day).day - 1) / 7) + 1;
+}
+
+/** Si `day` es la última ocurrencia de su día de la semana en su mes. */
+function isLastWeekdayOfMonth(day: number): boolean {
+  const { year, month, day: dom } = daysToCivil(day);
+  return dom + 7 > daysInMonth(year, month);
+}
 
 /** Fecha `YYYY-MM-DD` de un nº de día desde 1970. */
 function formatCivilDate(days: number): string {
@@ -72,6 +110,16 @@ export function weekdayIn(instant: Date, timeZone: string): number {
 }
 
 /**
+ * Qué ocurrencia de su día de la semana es `instant` dentro de su mes, en la zona dada:
+ * 1-4, o -1 si además es la última (mismo criterio que acepta `validateRecurrence`).
+ */
+export function bySetPosIn(instant: Date, timeZone: string): BySetPos {
+  const { year, month, day } = wallClock(instant, timeZone);
+  const civilDay = civilToDays(year, month, day);
+  return isLastWeekdayOfMonth(civilDay) ? -1 : (ordinalOfWeekdayInMonth(civilDay) as BySetPos);
+}
+
+/**
  * Forma canónica de una regla: claves en orden fijo, sin campos vacíos y, en `weekly`, con
  * los días ordenados, sin repetir y completados con el del inicio si faltaban. Así dos
  * reglas equivalentes se guardan (y comparan) igual.
@@ -87,6 +135,7 @@ export function normalizeRecurrence(
   } else if (rule.byWeekday !== undefined) {
     out.byWeekday = rule.byWeekday; // se conserva para que la validación lo rechace
   }
+  if (rule.bySetPos !== undefined) out.bySetPos = rule.bySetPos;
   if (rule.until !== undefined) out.until = rule.until;
   if (rule.count !== undefined) out.count = rule.count;
   return out;
@@ -103,6 +152,7 @@ export function recurrenceKey(rule: RecurrenceRule | null): string {
     rule.freq,
     rule.interval,
     rule.byWeekday ?? null,
+    rule.bySetPos ?? null,
     rule.until ?? null,
     rule.count ?? null,
   ]);
@@ -167,6 +217,22 @@ export function validateRecurrence(
     }
   }
 
+  if (rule.bySetPos !== undefined) {
+    if (rule.freq !== 'monthly' && rule.freq !== 'yearly') {
+      issues.push(at('bySetPos solo se admite con freq monthly o yearly'));
+    } else if (!(BY_SET_POS_VALUES as readonly number[]).includes(rule.bySetPos)) {
+      issues.push(at('bySetPos debe ser 1, 2, 3, 4 o -1 (última)'));
+    } else if (startDay !== null) {
+      const ordinal = ordinalOfWeekdayInMonth(startDay);
+      const isLast = isLastWeekdayOfMonth(startDay);
+      if (rule.bySetPos !== ordinal && !(rule.bySetPos === -1 && isLast)) {
+        issues.push(
+          at('bySetPos no coincide con qué ocurrencia de ese día de la semana es el inicio'),
+        );
+      }
+    }
+  }
+
   return issues;
 }
 
@@ -209,7 +275,7 @@ function* candidateDays(
         if (day >= startDay) yield day;
       }
     }
-  } else {
+  } else if (rule.freq === 'monthly') {
     const startIndex = start.year * 12 + (start.month - 1);
     const from = daysToCivil(fromDay);
     const fromIndex = from.year * 12 + (from.month - 1);
@@ -218,7 +284,27 @@ function* candidateDays(
       const index = startIndex + k * interval;
       const year = Math.floor(index / 12);
       const month = mod(index, 12) + 1;
-      if (start.day <= daysInMonth(year, month)) yield civilToDays(year, month, start.day);
+      const day =
+        rule.bySetPos === undefined
+          ? start.day <= daysInMonth(year, month)
+            ? civilToDays(year, month, start.day)
+            : null
+          : nthWeekdayOfMonth(year, month, weekdayOf(startDay), rule.bySetPos);
+      if (day !== null) yield day;
+    }
+  } else {
+    // yearly
+    const from = daysToCivil(fromDay);
+    const k0 = firstPeriod((from.year - start.year) / interval);
+    for (let k = k0; ; k++) {
+      const year = start.year + k * interval;
+      const day =
+        rule.bySetPos === undefined
+          ? start.month === 2 && start.day === 29 && !isLeapYear(year)
+            ? null
+            : civilToDays(year, start.month, start.day)
+          : nthWeekdayOfMonth(year, start.month, weekdayOf(startDay), rule.bySetPos);
+      if (day !== null) yield day;
     }
   }
 }
@@ -322,6 +408,7 @@ export function splitRecurrenceAt(series: RecurringSeries, at: Date): Recurrence
     freq: rule.freq,
     interval: rule.interval,
     ...(rule.byWeekday && { byWeekday: rule.byWeekday }),
+    ...(rule.bySetPos !== undefined && { bySetPos: rule.bySetPos }),
   };
 
   const before: RecurrenceRule | null =

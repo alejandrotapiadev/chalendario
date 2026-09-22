@@ -96,6 +96,22 @@ describe('serializeIcs', () => {
     expect(text).toContain('RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;COUNT=4\r\n');
   });
 
+  it('bySetPos usa el ordinal incrustado en BYDAY, y BYMONTH además en anual', () => {
+    // 21 sep 2026 es el 3er lunes de septiembre.
+    const monthly = fields({ recurrence: { freq: 'monthly', interval: 1, bySetPos: 3 } });
+    expect(ics([exportEvent({ fields: monthly })])).toContain('RRULE:FREQ=MONTHLY;BYDAY=3MO\r\n');
+
+    const yearly = fields({ recurrence: { freq: 'yearly', interval: 1, bySetPos: 3 } });
+    expect(ics([exportEvent({ fields: yearly })])).toContain(
+      'RRULE:FREQ=YEARLY;BYDAY=3MO;BYMONTH=9\r\n',
+    );
+  });
+
+  it('anual sin bySetPos no lleva parámetros extra', () => {
+    const yearly = fields({ recurrence: { freq: 'yearly', interval: 1 } });
+    expect(ics([exportEvent({ fields: yearly })])).toContain('RRULE:FREQ=YEARLY\r\n');
+  });
+
   it('UNTIL: instante UTC del final del día local en eventos con hora, fecha en los de todo el día', () => {
     const timed = fields({ recurrence: { freq: 'daily', interval: 1, until: '2026-10-02' } });
     // 23:59:59 del 2 oct en Madrid (CEST) = 21:59:59Z
@@ -336,11 +352,12 @@ describe('parseIcs: repetición', () => {
   });
 
   it.each([
-    ['FREQ=YEARLY', /FREQ=YEARLY/],
-    ['FREQ=MONTHLY;BYDAY=2TU', /BYDAY/],
-    ['FREQ=MONTHLY;BYDAY=MO', /BYDAY/],
+    ['FREQ=MONTHLY;BYDAY=2TU', /BYDAY=2TU/],
+    ['FREQ=MONTHLY;BYDAY=MO', /BYDAY=MO/],
     ['FREQ=WEEKLY;BYDAY=2MO', /BYDAY=2MO/],
-    ['FREQ=MONTHLY;BYSETPOS=1;BYDAY=MO', /BYSETPOS/],
+    // El 21 sep 2026 es el 3er lunes, no el 1º: la posición no coincide con el inicio real.
+    ['FREQ=MONTHLY;BYSETPOS=1;BYDAY=MO', /BYDAY=MO/],
+    ['FREQ=YEARLY;BYDAY=3MO', /BYMONTH/],
     ['FREQ=DAILY;BYHOUR=9', /BYHOUR/],
     ['FREQ=MONTHLY;BYMONTHDAY=15', /BYMONTHDAY=15/],
     ['FREQ=DAILY;INTERVAL=200', /INTERVAL=200/],
@@ -351,6 +368,32 @@ describe('parseIcs: repetición', () => {
     expect(events[0]!.fields.recurrence).toBeNull();
     expect(warnings.join(' ')).toMatch(reason);
     expect(warnings.join(' ')).toContain('«Serie»');
+  });
+
+  it('anual: mismo día cada año', () => {
+    expect(parseRule('FREQ=YEARLY').events[0]!.fields.recurrence).toEqual({
+      freq: 'yearly',
+      interval: 1,
+    });
+  });
+
+  it('mensual/anual con «Nª ocurrencia de un día»: ordinal en BYDAY (Outlook) o BYSETPOS (Google)', () => {
+    // El 21 sep 2026 es el 3er lunes de septiembre.
+    expect(parseRule('FREQ=MONTHLY;BYDAY=3MO').events[0]!.fields.recurrence).toEqual({
+      freq: 'monthly',
+      interval: 1,
+      bySetPos: 3,
+    });
+    expect(parseRule('FREQ=MONTHLY;BYDAY=MO;BYSETPOS=3').events[0]!.fields.recurrence).toEqual({
+      freq: 'monthly',
+      interval: 1,
+      bySetPos: 3,
+    });
+    expect(parseRule('FREQ=YEARLY;BYMONTH=9;BYDAY=3MO').events[0]!.fields.recurrence).toEqual({
+      freq: 'yearly',
+      interval: 1,
+      bySetPos: 3,
+    });
   });
 
   it('EXDATE y RDATE avisan de que no se conservan', () => {
@@ -538,6 +581,20 @@ describe('ciclo completo: serializar y volver a leer', () => {
       }),
     ],
     ['cancelado', fields({ status: 'cancelled' })],
+    [
+      'anual',
+      fields({
+        startAt: madrid(2026, 9, 15, 9),
+        endAt: madrid(2026, 9, 15, 10),
+        recurrence: { freq: 'yearly', interval: 2 },
+      }),
+    ],
+    [
+      // 21 sep 2026 es el 3er lunes de septiembre.
+      'mensual con bySetPos',
+      fields({ recurrence: { freq: 'monthly', interval: 1, bySetPos: 3 } }),
+    ],
+    ['anual con bySetPos', fields({ recurrence: { freq: 'yearly', interval: 1, bySetPos: 3 } })],
     [
       'a las 00:30 (cruza el cambio de hora)',
       fields({

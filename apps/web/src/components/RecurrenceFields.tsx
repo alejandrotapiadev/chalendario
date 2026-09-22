@@ -1,22 +1,41 @@
-import { RECURRENCE_LIMITS } from '@calendar/domain';
+import { RECURRENCE_LIMITS, type BySetPos } from '@calendar/domain';
+import { isLastWeekdayInMonth, weekdayOrdinalInMonth } from '../calendar/dates.ts';
 import {
+  bySetPosLabel,
   WEEKDAY_LETTERS,
   WEEKDAY_LONG,
   type RepeatForm,
   type RepeatMode,
 } from '../calendar/recurrence.ts';
 
+const MONTH_LONG = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+];
+
 const MODES: { value: RepeatMode; label: string }[] = [
   { value: 'none', label: 'No se repite' },
   { value: 'daily', label: 'Cada día' },
   { value: 'weekly', label: 'Cada semana' },
   { value: 'monthly', label: 'Cada mes' },
+  { value: 'yearly', label: 'Cada año' },
 ];
 
 const UNIT: Record<Exclude<RepeatMode, 'none'>, [string, string]> = {
   daily: ['día', 'días'],
   weekly: ['semana', 'semanas'],
   monthly: ['mes', 'meses'],
+  yearly: ['año', 'años'],
 };
 
 interface Props {
@@ -24,11 +43,16 @@ interface Props {
   onChange: (next: RepeatForm) => void;
   /** Día de la semana (0 = lunes) en que empieza el evento: siempre forma parte de la regla. */
   startWeekday: number;
+  /** Fecha de inicio del evento (hora local), para describir las opciones de mes/año. */
+  startDate: Date;
 }
 
-export function RecurrenceFields({ value, onChange, startWeekday }: Props) {
+export function RecurrenceFields({ value, onChange, startWeekday, startDate }: Props) {
   const set = (patch: Partial<RepeatForm>) => onChange({ ...value, ...patch });
   const repeating = value.repeat !== 'none';
+  const startBySetPos: BySetPos = isLastWeekdayInMonth(startDate)
+    ? -1
+    : (weekdayOrdinalInMonth(startDate) as BySetPos);
 
   const toggleWeekday = (day: number) => {
     const marked = value.weekdays.includes(day)
@@ -86,6 +110,31 @@ export function RecurrenceFields({ value, onChange, startWeekday }: Props) {
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {(value.repeat === 'monthly' || value.repeat === 'yearly') && (
+            <div className="repeat-end" role="radiogroup" aria-label="Día del mes o del año">
+              <label className="inline">
+                <input
+                  type="radio"
+                  name="monthly-mode"
+                  checked={value.monthlyMode === 'onDay'}
+                  onChange={() => set({ monthlyMode: 'onDay' })}
+                />
+                El día {startDate.getDate()}
+                {value.repeat === 'yearly' && ` de ${MONTH_LONG[startDate.getMonth()]}`}
+              </label>
+              <label className="inline">
+                <input
+                  type="radio"
+                  name="monthly-mode"
+                  checked={value.monthlyMode === 'bySetPos'}
+                  onChange={() => set({ monthlyMode: 'bySetPos' })}
+                />
+                El {bySetPosLabel(startBySetPos, startWeekday)}
+                {value.repeat === 'yearly' && ` de ${MONTH_LONG[startDate.getMonth()]}`}
+              </label>
             </div>
           )}
 

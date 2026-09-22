@@ -22,6 +22,10 @@ export const recurrenceRuleSchema = z.strictObject({
   freq: z.enum(RECURRENCE_FREQS),
   interval: z.number(),
   byWeekday: z.array(z.number()).optional(),
+  /** 1ª–4ª (o -1 = última) ocurrencia del día de la semana del inicio; solo monthly/yearly. */
+  bySetPos: z
+    .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(-1)])
+    .optional(),
   until: z.string().optional(),
   count: z.number().optional(),
 });

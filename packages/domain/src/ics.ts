@@ -2,12 +2,20 @@
 // Módulo puro (sin I/O): recibe y devuelve texto y datos.
 //
 // Lo que se conserva: título, descripción, ubicación, estado, fechas (con zona horaria y
-// «todo el día»), repetición diaria/semanal/mensual, avisos (VALARM) y categoría.
+// «todo el día»), repetición diaria/semanal/mensual/anual (con «Nª ocurrencia de un día de
+// la semana», BYDAY con ordinal o BYSETPOS), avisos (VALARM) y categoría.
 // Lo que no: excepciones de series (EXDATE, RECURRENCE-ID), reglas RRULE complejas, invitados
 // y adjuntos. Al leer, lo no soportado se avisa en `warnings` en vez de fallar en silencio.
 
 import type { EventFields, NewEventInput } from './event.ts';
-import { RECURRENCE_LIMITS, weekdayIn, type RecurrenceRule } from './recurrence.ts';
+import {
+  BY_SET_POS_VALUES,
+  RECURRENCE_LIMITS,
+  bySetPosIn,
+  weekdayIn,
+  type BySetPos,
+  type RecurrenceRule,
+} from './recurrence.ts';
 import { isValidTimezone, wallClock, zonedTimeToInstant } from './timezone.ts';
 
 export class IcsError extends Error {
@@ -99,6 +107,14 @@ function formatRule(rule: RecurrenceRule, fields: EventFields): string {
   if (rule.interval !== 1) parts.push(`INTERVAL=${rule.interval}`);
   if (rule.freq === 'weekly' && rule.byWeekday?.length) {
     parts.push(`BYDAY=${rule.byWeekday.map((d) => DAY_CODES[d]).join(',')}`);
+  }
+  if (rule.bySetPos !== undefined) {
+    // «el 2º martes» / «el último viernes»: ordinal incrustado en BYDAY, como en Outlook.
+    const day = DAY_CODES[weekdayIn(fields.startAt, fields.timezone)];
+    parts.push(`BYDAY=${rule.bySetPos}${day}`);
+    if (rule.freq === 'yearly') {
+      parts.push(`BYMONTH=${wallClock(fields.startAt, fields.timezone).month}`);
+    }
   }
   if (rule.count !== undefined) parts.push(`COUNT=${rule.count}`);
   if (rule.until !== undefined) {
@@ -340,7 +356,7 @@ interface RuleResult {
 
 function parseRule(
   value: string,
-  start: { weekday: number; day: number; zone: string },
+  start: { weekday: number; day: number; month: number; bySetPos: BySetPos; zone: string },
   fallbackZone: string,
 ): RuleResult {
   const parts = new Map<string, string>();
@@ -351,12 +367,22 @@ function parseRule(
   const unsupported = (why: string): RuleResult => ({ rule: null, unsupported: why });
 
   const freqText = parts.get('FREQ')?.toUpperCase();
-  const freq = ({ DAILY: 'daily', WEEKLY: 'weekly', MONTHLY: 'monthly' } as const)[
-    freqText as 'DAILY' | 'WEEKLY' | 'MONTHLY'
-  ];
+  const freq = (
+    { DAILY: 'daily', WEEKLY: 'weekly', MONTHLY: 'monthly', YEARLY: 'yearly' } as const
+  )[freqText as 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY'];
   if (!freq) return unsupported(`FREQ=${freqText ?? '?'}`);
 
-  const known = new Set(['FREQ', 'INTERVAL', 'BYDAY', 'BYMONTHDAY', 'UNTIL', 'COUNT', 'WKST']);
+  const known = new Set([
+    'FREQ',
+    'INTERVAL',
+    'BYDAY',
+    'BYMONTHDAY',
+    'BYMONTH',
+    'BYSETPOS',
+    'UNTIL',
+    'COUNT',
+    'WKST',
+  ]);
   for (const key of parts.keys()) if (!known.has(key)) return unsupported(key);
 
   const interval = Number(parts.get('INTERVAL') ?? 1);
@@ -365,9 +391,15 @@ function parseRule(
   }
   const rule: RecurrenceRule = { freq, interval };
 
+  const byMonth = parts.get('BYMONTH');
+  if (byMonth !== undefined && (freq !== 'yearly' || Number(byMonth) !== start.month)) {
+    return unsupported(`BYMONTH=${byMonth}`);
+  }
+
   const byDay = parts.get('BYDAY');
-  if (byDay !== undefined) {
-    if (freq !== 'weekly') return unsupported('BYDAY fuera de una regla semanal');
+  const bySetPosParam = parts.get('BYSETPOS');
+  if (byDay !== undefined && freq === 'weekly') {
+    if (bySetPosParam !== undefined) return unsupported(`BYSETPOS=${bySetPosParam}`);
     const days: number[] = [];
     for (const token of byDay.split(',')) {
       const t = /^([+-]?\d+)?(MO|TU|WE|TH|FR|SA|SU)$/.exec(token.trim().toUpperCase());
@@ -376,10 +408,44 @@ function parseRule(
     }
     // El inicio del evento siempre es la primera ocurrencia, como en la mayoría de clientes.
     rule.byWeekday = [...new Set([...days, start.weekday])].sort((a, b) => a - b);
+  } else if (byDay !== undefined && (freq === 'monthly' || freq === 'yearly')) {
+    // «el 2º martes»: o el ordinal va incrustado en BYDAY (Outlook), o va aparte en
+    // BYSETPOS junto a un BYDAY de un solo día (Google Calendar). Solo un día a la vez.
+    const tokens = byDay.split(',');
+    const withOrdinal =
+      tokens.length === 1
+        ? /^([+-]?\d+)(MO|TU|WE|TH|FR|SA|SU)$/.exec(tokens[0]!.trim().toUpperCase())
+        : null;
+    const plain =
+      tokens.length === 1 ? /^(MO|TU|WE|TH|FR|SA|SU)$/.exec(tokens[0]!.trim().toUpperCase()) : null;
+    let pos: number, day: number;
+    if (withOrdinal && bySetPosParam === undefined) {
+      [pos, day] = [Number(withOrdinal[1]), DAY_CODES.indexOf(withOrdinal[2]!)];
+    } else if (plain && bySetPosParam !== undefined) {
+      [pos, day] = [Number(bySetPosParam), DAY_CODES.indexOf(plain[1]!)];
+    } else {
+      return unsupported(`BYDAY=${byDay}`);
+    }
+    if (freq === 'yearly' && byMonth === undefined) return unsupported('BYDAY anual sin BYMONTH');
+    if (
+      day !== start.weekday ||
+      !(BY_SET_POS_VALUES as readonly number[]).includes(pos) ||
+      pos !== start.bySetPos
+    ) {
+      return unsupported(`BYDAY=${byDay}`);
+    }
+    rule.bySetPos = pos as BySetPos;
+  } else if (byDay !== undefined) {
+    return unsupported('BYDAY fuera de una regla semanal, mensual o anual');
+  } else if (bySetPosParam !== undefined) {
+    return unsupported(`BYSETPOS=${bySetPosParam}`);
   }
 
   const byMonthDay = parts.get('BYMONTHDAY');
-  if (byMonthDay !== undefined && (freq !== 'monthly' || Number(byMonthDay) !== start.day)) {
+  if (
+    byMonthDay !== undefined &&
+    ((freq !== 'monthly' && freq !== 'yearly') || Number(byMonthDay) !== start.day)
+  ) {
     return unsupported(`BYMONTHDAY=${byMonthDay}`);
   }
 
@@ -567,6 +633,8 @@ function readEvent(
       {
         weekday: weekdayIn(startAt, timezone),
         day: wallClock(startAt, timezone).day,
+        month: wallClock(startAt, timezone).month,
+        bySetPos: bySetPosIn(startAt, timezone),
         zone: timezone,
       },
       timezone,

@@ -128,6 +128,91 @@ describe.skipIf(!testDatabaseUrl)('autenticación', () => {
     });
   });
 
+  describe('sesiones activas', () => {
+    it('lista las sesiones del usuario, marcando la actual, sin las de otro', async () => {
+      const ana = await signUp(app, 'ana@example.com');
+      const other = await signUp(app, 'other@example.com');
+      // Una segunda sesión de Ana, iniciando en otro «dispositivo».
+      const second = await login({ email: 'ana@example.com', password: TEST_PASSWORD });
+      const secondCookie = `sid=${second.cookies.find((c) => c.name === 'sid')!.value}`;
+
+      const listed = await ana.client.inject({ method: 'GET', url: '/auth/sessions' });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json()).toHaveLength(2);
+      expect(listed.json().filter((s: { current: boolean }) => s.current)).toHaveLength(1);
+
+      const fromSecond = await withCookie(app, secondCookie).inject({
+        method: 'GET',
+        url: '/auth/sessions',
+      });
+      expect(fromSecond.json().find((s: { current: boolean }) => s.current)).toBeDefined();
+
+      // El otro usuario solo ve la suya (la de su propio registro), no las de Ana.
+      const othersSessions = (
+        await other.client.inject({ method: 'GET', url: '/auth/sessions' })
+      ).json();
+      expect(othersSessions).toHaveLength(1);
+      expect(othersSessions[0].current).toBe(true);
+    });
+
+    it('cierra una sesión propia por id (no la actual); la de otro usuario da 404', async () => {
+      const ana = await signUp(app, 'ana@example.com');
+      const other = await signUp(app, 'other@example.com');
+      const second = await login({ email: 'ana@example.com', password: TEST_PASSWORD });
+      const secondCookie = `sid=${second.cookies.find((c) => c.name === 'sid')!.value}`;
+      // `ana.client` siempre usa la primera sesión: la segunda aparece como `current: false`.
+      const sessions: { id: string; current: boolean }[] = (
+        await ana.client.inject({ method: 'GET', url: '/auth/sessions' })
+      ).json();
+      const otherSession = sessions.find((s) => !s.current)!;
+
+      expect(
+        (
+          await other.client.inject({
+            method: 'DELETE',
+            url: `/auth/sessions/${otherSession.id}`,
+          })
+        ).statusCode,
+      ).toBe(404);
+
+      const closed = await ana.client.inject({
+        method: 'DELETE',
+        url: `/auth/sessions/${otherSession.id}`,
+      });
+      expect(closed.statusCode).toBe(204);
+      // La sesión con la que se hizo la petición (la primera) sigue siendo válida.
+      expect((await ana.client.inject({ method: 'GET', url: '/auth/me' })).statusCode).toBe(200);
+      // La sesión cerrada (la segunda) ya no vale.
+      expect(
+        (await withCookie(app, secondCookie).inject({ method: 'GET', url: '/auth/me' })).statusCode,
+      ).toBe(401);
+    });
+
+    it('cerrar la sesión con la que se hace la petición también borra la cookie', async () => {
+      const { client } = await signUp(app);
+      const [{ id }] = (await client.inject({ method: 'GET', url: '/auth/sessions' })).json();
+      const res = await client.inject({ method: 'DELETE', url: `/auth/sessions/${id}` });
+      expect(res.statusCode).toBe(204);
+      expect(res.cookies.find((c) => c.name === 'sid')?.value).toBe('');
+      expect((await client.inject({ method: 'GET', url: '/auth/me' })).statusCode).toBe(401);
+    });
+
+    it('un id con formato inválido da 400; uno inexistente, 404', async () => {
+      const { client } = await signUp(app);
+      expect(
+        (await client.inject({ method: 'DELETE', url: '/auth/sessions/no-es-un-uuid' })).statusCode,
+      ).toBe(400);
+      expect(
+        (
+          await client.inject({
+            method: 'DELETE',
+            url: '/auth/sessions/00000000-0000-0000-0000-000000000000',
+          })
+        ).statusCode,
+      ).toBe(404);
+    });
+  });
+
   describe('protección de rutas', () => {
     it.each([
       ['GET', '/calendars'],
@@ -136,6 +221,8 @@ describe.skipIf(!testDatabaseUrl)('autenticación', () => {
       ['POST', '/events'],
       ['GET', '/auth/me'],
       ['POST', '/auth/logout'],
+      ['GET', '/auth/sessions'],
+      ['DELETE', '/auth/sessions/00000000-0000-0000-0000-000000000000'],
     ])('%s %s sin sesión da 401', async (method, url) => {
       const res = await app.inject({ method: method as 'GET', url });
       expect(res.statusCode).toBe(401);

@@ -20,3 +20,12 @@ export interface UserDto {
   email: string;
   name: string;
 }
+
+/** Una sesión activa (ver y cerrar sesiones, T-11). */
+export interface SessionDto {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  /** Es la sesión con la que se hizo esta petición (el navegador actual). */
+  current: boolean;
+}

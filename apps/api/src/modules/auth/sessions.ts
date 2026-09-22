@@ -17,12 +17,20 @@ export async function createSession(db: Queryable, userId: string): Promise<stri
   return token;
 }
 
-export async function findSessionUser(db: Queryable, token: string): Promise<string | null> {
-  const { rows } = await db.query<{ user_id: string }>(
-    'SELECT user_id FROM sessions WHERE token_hash = $1 AND expires_at > now()',
+export interface SessionIdentity {
+  sessionId: string;
+  userId: string;
+}
+
+export async function findSessionUser(
+  db: Queryable,
+  token: string,
+): Promise<SessionIdentity | null> {
+  const { rows } = await db.query<{ id: string; user_id: string }>(
+    'SELECT id, user_id FROM sessions WHERE token_hash = $1 AND expires_at > now()',
     [hashToken(token)],
   );
-  return rows[0]?.user_id ?? null;
+  return rows[0] ? { sessionId: rows[0].id, userId: rows[0].user_id } : null;
 }
 
 export async function deleteSession(db: Queryable, token: string): Promise<void> {
@@ -31,4 +39,34 @@ export async function deleteSession(db: Queryable, token: string): Promise<void>
 
 export async function deleteExpiredSessions(db: Queryable): Promise<void> {
   await db.query('DELETE FROM sessions WHERE expires_at <= now()');
+}
+
+export interface SessionRow {
+  id: string;
+  created_at: Date;
+  expires_at: Date;
+}
+
+/** Sesiones activas del usuario, la más reciente primero. */
+export async function listSessions(db: Queryable, userId: string): Promise<SessionRow[]> {
+  const { rows } = await db.query<SessionRow>(
+    `SELECT id, created_at, expires_at FROM sessions
+      WHERE user_id = $1 AND expires_at > now()
+      ORDER BY created_at DESC`,
+    [userId],
+  );
+  return rows;
+}
+
+/** Cierra una sesión propia por id; no toca las de otro usuario. */
+export async function deleteSessionById(
+  db: Queryable,
+  userId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const { rowCount } = await db.query('DELETE FROM sessions WHERE id = $1 AND user_id = $2', [
+    sessionId,
+    userId,
+  ]);
+  return rowCount === 1;
 }

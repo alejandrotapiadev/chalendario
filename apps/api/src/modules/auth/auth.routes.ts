@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { loginSchema, registerSchema, type UserDto } from '@calendar/shared';
+import { z } from 'zod';
+import { loginSchema, registerSchema, type SessionDto, type UserDto } from '@calendar/shared';
 import { withTransaction, type Db } from '../../db.ts';
-import { AppError, ConflictError } from '../../errors.ts';
+import { AppError, ConflictError, NotFoundError } from '../../errors.ts';
 import { hashPassword, verifyAgainstDummy, verifyPassword, type ScryptParams } from './password.ts';
 import {
   SESSION_COOKIE,
@@ -9,13 +10,17 @@ import {
   createSession,
   deleteExpiredSessions,
   deleteSession,
+  deleteSessionById,
   findSessionUser,
+  listSessions,
 } from './sessions.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
     /** Usuario autenticado de la petición (solo en rutas protegidas). */
     userId: string;
+    /** Sesión con la que se autenticó esta petición (solo en rutas protegidas). */
+    sessionId: string;
   }
 }
 
@@ -27,6 +32,8 @@ export interface AuthOptions {
   rateLimit: boolean;
   scrypt: ScryptParams;
 }
+
+const idParam = z.object({ id: z.uuid() });
 
 function setSessionCookie(reply: FastifyReply, token: string, secure: boolean): void {
   reply.setCookie(SESSION_COOKIE, token, {
@@ -90,18 +97,23 @@ export function registerAuthRoutes(app: FastifyInstance, db: Db, opts: AuthOptio
   });
 }
 
-/** Exige sesión válida en todo lo registrado dentro de este scope y fija `request.userId`. */
+/**
+ * Exige sesión válida en todo lo registrado dentro de este scope y fija `request.userId` y
+ * `request.sessionId`.
+ */
 export function requireSession(app: FastifyInstance, db: Db): void {
   app.decorateRequest('userId', '');
+  app.decorateRequest('sessionId', '');
   app.addHook('onRequest', async (request) => {
     const token = request.cookies[SESSION_COOKIE];
-    const userId = token ? await findSessionUser(db, token) : null;
-    if (!userId) throw new AppError(401, 'unauthorized', 'Inicia sesión para continuar');
-    request.userId = userId;
+    const identity = token ? await findSessionUser(db, token) : null;
+    if (!identity) throw new AppError(401, 'unauthorized', 'Inicia sesión para continuar');
+    request.userId = identity.userId;
+    request.sessionId = identity.sessionId;
   });
 }
 
-/** Rutas que necesitan sesión: quién soy y cerrar sesión. */
+/** Rutas que necesitan sesión: quién soy, cerrar sesión y gestionar las sesiones activas. */
 export function registerSessionRoutes(app: FastifyInstance, db: Db, opts: AuthOptions): void {
   app.get('/auth/me', async (request) => {
     const { rows } = await db.query<UserDto>('SELECT id, email, name FROM users WHERE id = $1', [
@@ -114,6 +126,26 @@ export function registerSessionRoutes(app: FastifyInstance, db: Db, opts: AuthOp
     const token = request.cookies[SESSION_COOKIE];
     if (token) await deleteSession(db, token);
     reply.clearCookie(SESSION_COOKIE, { path: '/', secure: opts.secureCookies, sameSite: 'lax' });
+    return reply.code(204).send();
+  });
+
+  app.get('/auth/sessions', async (request) => {
+    const rows = await listSessions(db, request.userId);
+    return rows.map((row): SessionDto => ({
+      id: row.id,
+      createdAt: row.created_at.toISOString(),
+      expiresAt: row.expires_at.toISOString(),
+      current: row.id === request.sessionId,
+    }));
+  });
+
+  app.delete('/auth/sessions/:id', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const deleted = await deleteSessionById(db, request.userId, id);
+    if (!deleted) throw new NotFoundError('Sesión');
+    if (id === request.sessionId) {
+      reply.clearCookie(SESSION_COOKIE, { path: '/', secure: opts.secureCookies, sameSite: 'lax' });
+    }
     return reply.code(204).send();
   });
 }

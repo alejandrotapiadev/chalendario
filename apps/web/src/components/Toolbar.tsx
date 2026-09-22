@@ -18,6 +18,7 @@ interface Props {
   onCreate: () => void;
   user: UserDto;
   onLogout: () => void;
+  onOpenSessions: () => void;
   onToggleSidebar: () => void;
   /** Búsqueda y recordatorios: se pasan ya construidos para que la barra no dependa de ellos. */
   search: ReactNode;
@@ -34,6 +35,7 @@ export function Toolbar({
   onCreate,
   user,
   onLogout,
+  onOpenSessions,
   onToggleSidebar,
   search,
   reminders,
@@ -80,6 +82,9 @@ export function Toolbar({
         {reminders}
         <button type="button" className="btn btn-primary" onClick={onCreate}>
           + Evento
+        </button>
+        <button type="button" className="btn" title={user.email} onClick={onOpenSessions}>
+          Sesiones
         </button>
         <button type="button" className="btn" title={user.email} onClick={onLogout}>
           Salir

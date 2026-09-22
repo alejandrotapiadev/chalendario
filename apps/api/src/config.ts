@@ -20,6 +20,16 @@ const schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  /**
+   * `true` si hay un proxy inverso delante (nginx, balanceador…): Fastify usa
+   * `X-Forwarded-For` para `request.ip`, que es lo que limita el ritmo de intentos por IP
+   * (si no, todo el tráfico parecería venir del proxy). Solo activarlo si ese proxy es de
+   * confianza y sobrescribe esa cabecera en vez de reenviar la del cliente sin tocar.
+   */
+  TRUST_PROXY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema>;

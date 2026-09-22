@@ -303,5 +303,29 @@ describe.skipIf(!testDatabaseUrl)('autenticación', () => {
       expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
       expect(statuses.slice(10)).toEqual([429, 429]);
     });
+
+    it('con trustProxy, cuenta la IP de X-Forwarded-For; sin él, se ignora', async () => {
+      const attempt = (app: FastifyInstance, ip: string) =>
+        app.inject({
+          method: 'POST',
+          url: '/auth/login',
+          payload: { email: 'x@example.com', password: 'wrong-password' },
+          headers: { 'x-forwarded-for': ip },
+        });
+
+      const trusted = await buildTestApp(pool, { rateLimit: true, trustProxy: true });
+      const statuses: number[] = [];
+      for (let i = 0; i < 10; i++) statuses.push((await attempt(trusted, '1.1.1.1')).statusCode);
+      expect(statuses.every((s) => s === 401)).toBe(true);
+      // Otra IP (según la cabecera) tiene su propio cupo; la primera ya agotó el suyo.
+      expect((await attempt(trusted, '2.2.2.2')).statusCode).toBe(401);
+      expect((await attempt(trusted, '1.1.1.1')).statusCode).toBe(429);
+
+      // Sin trustProxy (por defecto), la cabecera no cuenta: todo comparte la IP real de
+      // la conexión, así que una tercera IP «distinta» ya está limitada.
+      const untrusted = await buildTestApp(pool, { rateLimit: true });
+      for (let i = 0; i < 10; i++) await attempt(untrusted, '3.3.3.3');
+      expect((await attempt(untrusted, '4.4.4.4')).statusCode).toBe(429);
+    });
   });
 });

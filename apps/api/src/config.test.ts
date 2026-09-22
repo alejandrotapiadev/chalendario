@@ -21,6 +21,13 @@ describe('loadConfig', () => {
     );
   });
 
+  it('TRUST_PROXY es false por defecto y acepta true', () => {
+    expect(loadConfig({ DATABASE_URL: 'postgres://x' }).TRUST_PROXY).toBe(false);
+    expect(loadConfig({ DATABASE_URL: 'postgres://x', TRUST_PROXY: 'true' }).TRUST_PROXY).toBe(
+      true,
+    );
+  });
+
   it('falla si falta DATABASE_URL', () => {
     expect(() => loadConfig({})).toThrow(/DATABASE_URL/);
   });

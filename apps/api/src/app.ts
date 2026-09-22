@@ -24,6 +24,8 @@ export interface AppDeps extends Partial<AuthOptions> {
   logger?: FastifyServerOptions['logger'];
   /** Descarga de `.ics` externos; se sustituye en las pruebas para no usar la red. */
   fetchIcs?: FetchIcs;
+  /** Hay un proxy inverso delante: usar `X-Forwarded-For` para `request.ip` (ver config.ts). */
+  trustProxy?: boolean;
 }
 
 /**
@@ -37,9 +39,10 @@ export function buildApp({
   rateLimit: limitLogins = true,
   scrypt = DEFAULT_SCRYPT,
   fetchIcs = defaultFetchIcs,
+  trustProxy = false,
 }: AppDeps): FastifyInstance {
   const auth: AuthOptions = { secureCookies, registrationOpen, rateLimit: limitLogins, scrypt };
-  const app = Fastify({ logger });
+  const app = Fastify({ logger, trustProxy });
 
   registerErrorHandler(app);
   app.register(cookie);

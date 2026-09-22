@@ -13,6 +13,7 @@ const app = buildApp({
   secureCookies: config.NODE_ENV === 'production',
   registrationOpen: config.REGISTRATION_OPEN,
   rateLimit: config.RATE_LIMIT,
+  trustProxy: config.TRUST_PROXY,
   scrypt: config.SCRYPT_FAST ? { N: 1024, r: 8, p: 1 } : DEFAULT_SCRYPT,
   logger: {
     level: config.LOG_LEVEL,

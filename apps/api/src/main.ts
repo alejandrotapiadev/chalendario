@@ -3,6 +3,7 @@ import { loadConfig } from './config.ts';
 import { createPool } from './db.ts';
 import { redactFeedToken } from './modules/interop/interop.routes.ts';
 import { defaultFetchIcs, startSubscriptionSync } from './modules/interop/interop.service.ts';
+import { DEFAULT_SCRYPT } from './modules/auth/password.ts';
 
 const config = loadConfig();
 const db = createPool(config.DATABASE_URL);
@@ -11,6 +12,8 @@ const app = buildApp({
   db,
   secureCookies: config.NODE_ENV === 'production',
   registrationOpen: config.REGISTRATION_OPEN,
+  rateLimit: config.RATE_LIMIT,
+  scrypt: config.SCRYPT_FAST ? { N: 1024, r: 8, p: 1 } : DEFAULT_SCRYPT,
   logger: {
     level: config.LOG_LEVEL,
     // El token del feed público va en la URL: no debe quedar escrito en los logs.

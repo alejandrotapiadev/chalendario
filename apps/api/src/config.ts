@@ -10,6 +10,16 @@ const schema = z.object({
     .enum(['true', 'false'])
     .default('true')
     .transform((v) => v === 'true'),
+  /** `false` quita el límite de intentos en login/registro (usado por las pruebas E2E). */
+  RATE_LIMIT: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** `true` usa un coste de scrypt mucho menor (usado por las pruebas E2E, no en producción). */
+  SCRYPT_FAST: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema>;

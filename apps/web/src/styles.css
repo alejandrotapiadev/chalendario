@@ -426,15 +426,21 @@ textarea {
   background: color-mix(in srgb, var(--event-color) 35%, var(--bg));
 }
 .tg-event-title {
-  font-weight: 600;
+  flex: none;
   max-width: 100%;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tg-event-time {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------- Diálogo de evento ---------- */

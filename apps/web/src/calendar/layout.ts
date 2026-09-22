@@ -1,5 +1,5 @@
 import type { EventDto } from '@calendar/shared';
-import { addDays, startOfDay } from './dates.ts';
+import { addDays, startOfDay, toDisplay } from './dates.ts';
 
 /** Parte de un evento que cae dentro de un día concreto. */
 export interface DaySegment {
@@ -16,16 +16,18 @@ export interface PositionedSegment extends DaySegment {
   columns: number;
 }
 
-export function overlapsDay(event: EventDto, day: Date): boolean {
+/** `day` y el resultado están en la zona de visualización (`timeZone`), no en la del evento. */
+export function overlapsDay(event: EventDto, day: Date, timeZone: string): boolean {
   const start = startOfDay(day);
   const end = addDays(start, 1);
-  return new Date(event.startAt) < end && new Date(event.endAt) > start;
+  return toDisplay(event.startAt, timeZone) < end && toDisplay(event.endAt, timeZone) > start;
 }
 
 /** Eventos de un día, separados en «todo el día» y con hora (recortados a ese día). */
 export function eventsForDay(
   events: EventDto[],
   day: Date,
+  timeZone: string,
 ): { allDay: EventDto[]; timed: DaySegment[] } {
   const dayStart = startOfDay(day);
   const dayEnd = addDays(dayStart, 1);
@@ -39,14 +41,14 @@ export function eventsForDay(
   const allDay: EventDto[] = [];
   const timed: DaySegment[] = [];
   for (const event of events) {
-    if (!overlapsDay(event, day)) continue;
+    if (!overlapsDay(event, day, timeZone)) continue;
     if (event.allDay) {
       allDay.push(event);
     } else {
       timed.push({
         event,
-        startMinute: minutesInDay(new Date(event.startAt)),
-        endMinute: minutesInDay(new Date(event.endAt)),
+        startMinute: minutesInDay(toDisplay(event.startAt, timeZone)),
+        endMinute: minutesInDay(toDisplay(event.endAt, timeZone)),
       });
     }
   }

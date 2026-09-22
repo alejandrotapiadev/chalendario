@@ -1,8 +1,37 @@
-// Utilidades de fechas en la zona horaria del navegador. La semana empieza en lunes.
+// Utilidades de fechas en la zona horaria elegida para ver el calendario (T-10; por
+// defecto, la del navegador). La semana empieza en lunes.
+
+import { wallClock, zonedTimeToInstant } from '@calendar/domain';
 
 export type ViewMode = 'month' | 'week' | 'day';
 
 export const LOCALE = 'es-ES';
+
+/**
+ * Un instante real, tal como lo lee la cuadrícula: un `Date` cuyos getters «locales»
+ * (`getFullYear`, `getHours`…) devuelven la hora de pared en `timeZone` en vez de la del
+ * navegador. Solo sirve para pintar y para las cuentas de arrastrar/redimensionar (que ya
+ * solo usan esos getters): no es un instante real, así que nunca se manda tal cual a la
+ * API ni se compara con `new Date()` (ver `fromDisplay`).
+ */
+export function toDisplay(iso: string, timeZone: string): Date {
+  const { year, month, day, hour, minute, second } = wallClock(new Date(iso), timeZone);
+  return new Date(year, month - 1, day, hour, minute, second);
+}
+
+/** Inversa de `toDisplay`: del «Date de pantalla» que resulta de arrastrar o crear, a su
+ * instante real (para mandarlo a la API). */
+export function fromDisplay(date: Date, timeZone: string): Date {
+  return zonedTimeToInstant(
+    date.getFullYear(),
+    date.getMonth() + 1,
+    date.getDate(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    timeZone,
+  );
+}
 
 export function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -140,4 +169,15 @@ export function daysBetween(a: Date, b: Date): number {
 /** Día de la semana con lunes = 0 … domingo = 6 (como en las reglas de repetición). */
 export function weekdayIndex(date: Date): number {
   return (date.getDay() + 6) % 7;
+}
+
+/** 1ª-4ª ocurrencia del día de la semana de `date` dentro de su mes (para `bySetPos`). */
+export function weekdayOrdinalInMonth(date: Date): number {
+  return Math.floor((date.getDate() - 1) / 7) + 1;
+}
+
+/** Si `date` es la última ocurrencia de su día de la semana dentro de su mes. */
+export function isLastWeekdayInMonth(date: Date): boolean {
+  const lastOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  return date.getDate() + 7 > lastOfMonth;
 }

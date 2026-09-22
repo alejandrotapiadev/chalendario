@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   addDays,
   addMonths,
+  fromDisplay,
   fromInputs,
   monthGridDays,
   shiftCursor,
   startOfWeek,
   toDateInput,
+  toDisplay,
   toTimeInput,
   viewTitle,
   visibleRange,
@@ -87,6 +89,33 @@ describe('navegación', () => {
     expect(ymd(shiftCursor('day', cursor, 1))).toBe('2026-09-24');
     expect(ymd(shiftCursor('week', cursor, -1))).toBe('2026-09-16');
     expect(ymd(shiftCursor('month', cursor, 1))).toBe('2026-10-23');
+  });
+});
+
+describe('toDisplay / fromDisplay (T-10)', () => {
+  it('lee la hora de pared en la zona pedida, no en la del entorno de pruebas', () => {
+    // 21 sep 2026, 08:00Z: en Madrid (CEST, UTC+2) son las 10:00; en Nueva York (UTC-4), las 04:00.
+    const instant = '2026-09-21T08:00:00Z';
+    const madrid = toDisplay(instant, 'Europe/Madrid');
+    expect([madrid.getHours(), madrid.getDate()]).toEqual([10, 21]);
+    const newYork = toDisplay(instant, 'America/New_York');
+    expect([newYork.getHours(), newYork.getDate()]).toEqual([4, 21]);
+  });
+
+  it('fromDisplay es la inversa de toDisplay para cualquier zona', () => {
+    const instant = '2026-09-21T08:00:00Z';
+    for (const zone of ['UTC', 'Europe/Madrid', 'America/New_York', 'Asia/Tokyo']) {
+      expect(fromDisplay(toDisplay(instant, zone), zone).toISOString()).toBe(
+        '2026-09-21T08:00:00.000Z',
+      );
+    }
+  });
+
+  it('un instante puede caer en un día distinto según la zona de visualización', () => {
+    // 21 sep 2026 23:30Z: en Tokio (UTC+9) ya es de madrugada del día 22.
+    const instant = '2026-09-21T23:30:00Z';
+    expect(toDisplay(instant, 'Asia/Tokyo').getDate()).toBe(22);
+    expect(toDisplay(instant, 'UTC').getDate()).toBe(21);
   });
 });
 

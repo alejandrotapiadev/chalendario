@@ -6,6 +6,7 @@ const event = (over: Partial<EventDto> & { start: Date; end: Date }): EventDto =
   id: over.id ?? 'e',
   calendarId: 'c',
   seriesId: null,
+  recurrenceId: null,
   version: 1,
   title: over.title ?? 'Evento',
   description: '',
@@ -24,17 +25,20 @@ const event = (over: Partial<EventDto> & { start: Date; end: Date }): EventDto =
 });
 
 describe('eventsForDay', () => {
+  // Instantes reales en UTC; se lee con timeZone: 'UTC' para no depender de la zona de
+  // quien ejecuta el test.
   const day = new Date(2026, 8, 21); // lunes 21 sep
+  const utc = (...args: Parameters<typeof Date.UTC>) => new Date(Date.UTC(...args));
 
   it('separa los eventos de todo el día y recorta los que cruzan medianoche', () => {
     const events = [
-      event({ id: 'a', start: new Date(2026, 8, 21, 9), end: new Date(2026, 8, 21, 10, 30) }),
-      event({ id: 'b', start: new Date(2026, 8, 20, 22), end: new Date(2026, 8, 21, 2) }),
-      event({ id: 'c', start: new Date(2026, 8, 21, 23), end: new Date(2026, 8, 22, 1) }),
-      event({ id: 'd', allDay: true, start: new Date(2026, 8, 20), end: new Date(2026, 8, 22) }),
-      event({ id: 'x', start: new Date(2026, 8, 22, 9), end: new Date(2026, 8, 22, 10) }),
+      event({ id: 'a', start: utc(2026, 8, 21, 9), end: utc(2026, 8, 21, 10, 30) }),
+      event({ id: 'b', start: utc(2026, 8, 20, 22), end: utc(2026, 8, 21, 2) }),
+      event({ id: 'c', start: utc(2026, 8, 21, 23), end: utc(2026, 8, 22, 1) }),
+      event({ id: 'd', allDay: true, start: utc(2026, 8, 20), end: utc(2026, 8, 22) }),
+      event({ id: 'x', start: utc(2026, 8, 22, 9), end: utc(2026, 8, 22, 10) }),
     ];
-    const { allDay, timed } = eventsForDay(events, day);
+    const { allDay, timed } = eventsForDay(events, day, 'UTC');
     expect(allDay.map((e) => e.id)).toEqual(['d']);
     expect(timed.map((s) => [s.event.id, s.startMinute, s.endMinute])).toEqual([
       ['a', 540, 630],
@@ -44,8 +48,8 @@ describe('eventsForDay', () => {
   });
 
   it('un evento que termina justo a medianoche no cuenta para el día siguiente', () => {
-    const e = event({ start: new Date(2026, 8, 20, 23), end: new Date(2026, 8, 21, 0) });
-    expect(eventsForDay([e], day).timed).toEqual([]);
+    const e = event({ start: utc(2026, 8, 20, 23), end: utc(2026, 8, 21, 0) });
+    expect(eventsForDay([e], day, 'UTC').timed).toEqual([]);
   });
 });
 

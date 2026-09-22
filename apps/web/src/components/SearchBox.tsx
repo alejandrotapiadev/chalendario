@@ -1,28 +1,17 @@
-import { useEffect, useState, type FocusEvent } from 'react';
+import { useEffect, useMemo, useState, type FocusEvent } from 'react';
+import { weekdayIn } from '@calendar/domain';
 import type { EventDto } from '@calendar/shared';
 import { api } from '../api.ts';
 import { LOCALE } from '../calendar/dates.ts';
 import { describeRule } from '../calendar/recurrence.ts';
 
 const DEBOUNCE_MS = 250;
-const when = new Intl.DateTimeFormat(LOCALE, {
-  weekday: 'short',
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-});
-const whenAllDay = new Intl.DateTimeFormat(LOCALE, {
-  weekday: 'short',
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-});
 
 interface Props {
   colorOf: (event: EventDto) => string;
   onOpen: (event: EventDto) => void;
+  /** Zona horaria en la que se muestran las fechas de los resultados (T-10). */
+  timeZone: string;
 }
 
 /** Resultados y la búsqueda a la que pertenecen: sirve para descartar respuestas antiguas. */
@@ -31,11 +20,35 @@ interface Results {
   events: EventDto[] | 'error';
 }
 
-export function SearchBox({ colorOf, onOpen }: Props) {
+export function SearchBox({ colorOf, onOpen, timeZone }: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Results | null>(null);
   const [open, setOpen] = useState(false);
   const trimmed = query.trim();
+  const when = useMemo(
+    () =>
+      new Intl.DateTimeFormat(LOCALE, {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone,
+      }),
+    [timeZone],
+  );
+  const whenAllDay = useMemo(
+    () =>
+      new Intl.DateTimeFormat(LOCALE, {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        timeZone,
+      }),
+    [timeZone],
+  );
 
   useEffect(() => {
     if (!trimmed) return;
@@ -110,7 +123,8 @@ export function SearchBox({ colorOf, onOpen }: Props) {
                   <span className="search-title">{event.title}</span>
                   <span className="muted search-meta">
                     {(event.allDay ? whenAllDay : when).format(new Date(event.startAt))}
-                    {event.recurrence && ` · ${describeRule(event.recurrence)}`}
+                    {event.recurrence &&
+                      ` · ${describeRule(event.recurrence, weekdayIn(new Date(event.startAt), event.timezone))}`}
                     {event.location && ` · ${event.location}`}
                   </span>
                 </span>

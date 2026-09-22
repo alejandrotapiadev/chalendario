@@ -18,3 +18,19 @@ export function saveStringSet(key: string, values: Set<string>): void {
     // sin persistencia: el estado sigue en memoria
   }
 }
+
+export function loadString(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function saveString(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // sin persistencia: el estado sigue en memoria
+  }
+}

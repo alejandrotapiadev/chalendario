@@ -127,14 +127,14 @@ const localFormat = (timeZone: string) =>
   });
 
 /**
- * Nota «equivale a…» para cuando la zona del evento no es la del navegador; null si son la
- * misma o el intervalo no es válido.
+ * Nota «equivale a…» para cuando la zona del evento no es `referenceZone` (la de
+ * visualización elegida, T-10); null si son la misma o el intervalo no es válido.
  */
 export function localEquivalent(
   start: Date | null,
   eventZone: string,
-  browserZone: string,
+  referenceZone: string,
 ): string | null {
-  if (!start || eventZone === browserZone || !isValidTimezone(eventZone)) return null;
-  return `Equivale a ${localFormat(browserZone).format(start)} en tu zona (${browserZone})`;
+  if (!start || eventZone === referenceZone || !isValidTimezone(eventZone)) return null;
+  return `Equivale a ${localFormat(referenceZone).format(start)} en tu zona (${referenceZone})`;
 }

@@ -16,6 +16,7 @@ import {
   getEvent,
   getVersion,
   listEvents,
+  listTrash,
   listVersions,
   restoreVersion,
   searchEvents,
@@ -35,6 +36,8 @@ export function registerEventRoutes(app: FastifyInstance, db: Db): void {
     const query = searchEventsQuerySchema.parse(request.query);
     return searchEvents(db, request.userId, query);
   });
+
+  app.get('/events/trash', async (request) => listTrash(db, request.userId));
 
   app.get('/events/:id', async (request) => {
     const { id } = params.parse(request.params);

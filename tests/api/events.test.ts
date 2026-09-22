@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createEvent } from '../../apps/api/src/modules/events/events.service.ts';
+import { createEvent, deleteEvent } from '../../apps/api/src/modules/events/events.service.ts';
 import { resetDatabase, testDatabaseUrl } from '../helpers/db.ts';
 import { buildTestApp, signUp, type Client } from '../helpers/session.ts';
 
@@ -272,6 +272,64 @@ describe.skipIf(!testDatabaseUrl)('API de eventos', () => {
       await app.inject({ method: 'DELETE', url: `/events/${id}` });
       expect((await patch(id, { title: 'X' })).statusCode).toBe(404);
       expect((await app.inject({ method: 'DELETE', url: `/events/${id}` })).statusCode).toBe(404);
+    });
+  });
+
+  describe('papelera', () => {
+    const trash = async () => (await app.inject({ method: 'GET', url: '/events/trash' })).json();
+
+    it('lista los eventos borrados, el más reciente primero', async () => {
+      const { id: first } = (await post(gym())).json();
+      const { id: second } = (await post({ ...gym(), title: 'Yoga' })).json();
+      await app.inject({ method: 'DELETE', url: `/events/${first}` });
+      await app.inject({ method: 'DELETE', url: `/events/${second}` });
+
+      const list = await trash();
+      expect(list.map((e: { id: string }) => e.id)).toEqual([second, first]);
+      expect(list[0]).toMatchObject({ title: 'Yoga', version: 2 });
+    });
+
+    it('un evento vivo no sale en la papelera', async () => {
+      await post(gym());
+      expect(await trash()).toEqual([]);
+    });
+
+    it('restaurar desde la papelera lo quita de ahí y lo devuelve a la lista', async () => {
+      const { id } = (await post(gym())).json();
+      await app.inject({ method: 'DELETE', url: `/events/${id}` });
+      const [trashed] = await trash();
+
+      const restored = await app.inject({
+        method: 'POST',
+        url: `/events/${id}/restore/${trashed.version}`,
+      });
+      expect(restored.statusCode).toBe(200);
+      expect(restored.json()).toMatchObject({ title: 'Gym', version: 3 });
+
+      expect(await trash()).toEqual([]);
+      const list = await app.inject({
+        method: 'GET',
+        url: '/events?from=2026-09-01T00:00:00Z&to=2026-10-01T00:00:00Z',
+      });
+      expect(list.json()).toMatchObject([{ id, title: 'Gym' }]);
+    });
+
+    it('no expone eventos borrados de otro usuario', async () => {
+      const other = await pool.query(
+        "INSERT INTO users (email, name) VALUES ('trash@y.z', 'X') RETURNING id",
+      );
+      const otherCal = await pool.query(
+        "INSERT INTO calendars (user_id, name) VALUES ($1, 'Ajeno') RETURNING id",
+        [other.rows[0].id],
+      );
+      const foreign = await createEvent(pool, other.rows[0].id, {
+        ...gym(),
+        calendarId: otherCal.rows[0].id,
+      });
+      await deleteEvent(pool, other.rows[0].id, foreign.id);
+
+      await post(gym());
+      expect(await trash()).toEqual([]);
     });
   });
 

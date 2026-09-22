@@ -30,6 +30,7 @@ import {
   findVersionRow,
   insertEvent,
   insertVersion,
+  listDeletedEvents,
   listExceptionsForSeries,
   listRecurringBefore,
   listSingleInRange,
@@ -214,6 +215,11 @@ export async function searchEvents(
   { q, limit }: SearchEventsQuery,
 ): Promise<EventDto[]> {
   return (await searchCurrent(db, userId, q, limit)).map(rowToDto);
+}
+
+/** Eventos borrados, los más recientes primero; `updatedAt` es de cuando se borraron. */
+export async function listTrash(db: Db, userId: string): Promise<EventDto[]> {
+  return (await listDeletedEvents(db, userId)).map(rowToDto);
 }
 
 /** Un evento tal como está definido: si se repite, con el inicio y fin de la primera ocurrencia. */
